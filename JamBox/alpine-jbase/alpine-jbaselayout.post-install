@@ -1,0 +1,10 @@
+#!/bin/sh
+
+
+for svc in dhcpcd; do
+	if rc-service --exists $svc; then
+		rc-update --quiet add $svc
+	fi
+done
+
+exit 0

@@ -1,0 +1,4 @@
+awk -F : '{print "JamBox-"$5$6}' /sys/class/net/eth0/address > /etc/hostname
+if [ -f /etc/hostapd/jambox-ap.conf ]; then
+apssid=`awk -F : '{print "JamBox-"$5$6}' /sys/class/net/eth0/address` && sed -iS "s/^ssid=.*/ssid=$apssid/" /etc/hostapd/jambox-ap.conf
+fi

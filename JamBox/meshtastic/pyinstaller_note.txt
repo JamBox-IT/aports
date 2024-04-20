@@ -1,0 +1,2 @@
+pyinstaller --onefile --copy-metadata meshtastic --collect-submodules meshtastic --hidden-import charset_normalizer.md
+__mypyc /usr/bin/meshtastic

@@ -1,0 +1,44 @@
+#Contributor: 
+#Maintainer: 
+pkgname=py3-pypubsub
+_realname=pypubsub
+pkgver=4.0.3
+pkgrel=0
+pkgdesc="Package to make human readable time"
+url="https://github.com/schollii/pypubsub"
+arch="noarch"
+license="MIT"
+depends="python3"
+checkdepends="python3-dev py3-pylint"
+makedepends="py3-setuptools py3-gpep517 py3-wheel python3-dev py3-pytest-cov"
+source="$_realname-$pkgver.tar.gz::https://github.com/schollii/pypubsub/archive/refs/tags/v4.0.3.tar.gz"
+builddir="$srcdir/$_realname-$pkgver"
+options="!check"
+
+build() {
+	python3 setup.py build
+#	gpep517 build-wheel \
+#		--wheel-dir .dist \
+#		--output-fd 3 3>&1 >&2
+}
+
+check() {
+	python3 setup.py test
+#	python3 -m venv --clear --without-pip --system-site-packages .testenv
+#	.testenv/bin/python3 -m installer .dist/*.whl
+#	.testenv/bin/python3 -m pytest
+}
+
+package() {
+	PYTHONPATH=$pkgdir$(python3 -c "import site; print(site.getsitepackages()[0])") \
+	python3 setup.py install \
+		--prefix=/usr \
+		--root="$pkgdir" \
+		--single-version-externally-managed
+#	python3 -m installer -d "$pkgdir" \
+#		.dist/*.whl
+}
+
+sha512sums="
+cf9aca44e91a5d0e5ecf6739deabf2980f9464395c89e3c5335c5248e47c570701e0534bb660c5005325a994d9f8e7f261f36bc8bea74cfc7eb760b73c572652  pypubsub-4.0.3.tar.gz
+"

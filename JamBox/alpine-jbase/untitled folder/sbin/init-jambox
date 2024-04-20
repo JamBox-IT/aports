@@ -1,0 +1,108 @@
+#!/bin/sh
+##################
+#
+# Copyright Corey DeLasaux <cordelster@gmail.com> (2017-2018)
+#
+#
+#
+PREFIX=
+
+. "$PREFIX/lib/libalpine.sh"
+. "$PREFIX/etc/jambox/jambox.conf"
+
+usage() {
+cat <<-__EOF__
+       ____.             __________                 
+      |    |____    _____\______   \ _______  ___  
+      |    \__  \  /     \|    |  _//  _ \  \/  /  
+  /\__|    |/ __ \|  C D  \    |   (  <_> >    <   
+  \________(____  /__|_|  /______  /\____/__/\_ \  
+                \/      \/       \/            \/  
+%+++++++++++++++++++++++++++++++ HELP INFO ++++++++++++++++++++++++++++++++%
+usage: init-jambox [-A] | [-hdS] [-m email@address]
+
+Setup JamBox
+
+options:
+ -A  Reset ALL
+ -h  Show this help
+ -d  Delete all ssl certs
+ -m  user@address.org or none
+ -S  Delete all ssh keys
+__EOF__
+exit 1
+}
+RMCERTS=0 
+RMKEYS=0
+while getopts "Ahdm:S" opt; do
+case $opt in
+A) RMCERTS=1 
+   RMKEYS=1;;
+h) usage;;
+m) EMAIL="$OPTARG";;
+d) RMCERTS=1;;
+S) RMKEYS=1;;
+:) echo "Option -$OPTARG requires an argument." >&2;exit 1;;
+\?) echo "Invalid option: -$OPTARG"; usage >&2;exit 1;;
+esac
+done
+
+if [ $RMCERTS == 1 ] || [ $RMKEYS == 1 ]; then
+if [ $RMCERTS == 1 ]; then
+        rm $SSLCNF $KEYFILE $CRTFILE $PEMFILE || echo "No CERTs exist."
+fi
+
+if [ $RMKEYS == 1 ]; then
+rm -f /etc/ssh/ssh_host_* || echo "No SSH keys exist."
+fi
+lbu_commit	
+exit 0
+fi
+
+if [ "$EMAIL" = "" ]; then
+echo -n "What email would you like to use? (or 'none') [sysadmin@$(hostname)] "
+default_read email "sysadmin@$(hostname)"
+fi
+
+if [ "$email" = "none" ]; then
+email="sysadmin@$(hostname -f || hostname)"
+fi
+
+EMAIL=$email
+
+if [ -f $PEMFILE ]; then
+echo "$PEMFILE already exist."
+else
+mkdir -p $SSLDIR
+cat >$SSLCNF <<-__EOF__
+[ req ]
+default_bits = 2048
+encrypt_key = yes
+distinguished_name = req_dn
+x509_extensions = cert_type
+prompt = no
+
+[ req_dn ]
+OU=JamBox server
+CN=$(hostname -f || hostname)
+emailAddress=${EMAIL:-postmaster@example.com}
+
+[ cert_type ]
+nsCertType = server
+__EOF__
+echo "Generating certificates for HTTPS..."
+openssl genrsa 2048 > $KEYFILE
+openssl req -new -x509 -nodes -sha1 -days 3650 -key $KEYFILE -config $SSLCNF > $CRTFILE
+cat $CRTFILE $KEYFILE >> $PEMFILE
+
+fi
+
+## Set banner in sshd_config
+sed -iS "s/^#Banner .*/Banner \/etc\/ssh\/sshd_banner/" /etc/ssh/sshd_config
+sed -iS "s/^# BACKUP_LIMIT.*/BACKUP_LIMIT=3/" /etc/lbu/lbu.conf
+
+if [ -f /media/mmcblk0p1/JamBox_setup.apkovl.tar.gz ]; then 
+	mv /media/mmcblk0p1/JamBox_setup.apkovl.tar.gz /media/mmcblk0p1/JamBox_setup.apkovl.tar.gz-configured
+fi
+
+lbu_commit

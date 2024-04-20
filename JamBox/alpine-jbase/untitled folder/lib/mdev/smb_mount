@@ -1,0 +1,50 @@
+#!/bin/sh
+#
+#  Copyright Corey DeLasaux <cordelster at gmail dot com> 2021
+#
+# takes input in the form of [action add|del] [DEV] [mountpoint]
+# Quick and dirty script, FIX ME change to case and add function
+
+#ACTION = $1
+#DEVICE = $2
+#MOUNTPOINT = $3
+
+if [[ $# -eq 0 ]] ; then
+    echo 'NO Arguments supplied to $0'
+    return 1
+fi
+
+if [[ $1 = "add" ]] ; then
+   if [ $# -le 2 ] ; then
+      echo "not enough arguments supplied $0"
+    return 1
+   fi
+   while [ ! -d /tmp/smb ] ; do
+      wait 2
+      mkdir -p /tmp/smb/smb.d
+      logger "$2 has $1 directory trying to creating $1 smb"
+   done
+cat >> /tmp/smb/smb.d/$2.conf <<-EOF
+[$2]
+   comment = Automatic USB Drive share by $0
+   path = $3
+   read only = no
+   public = yes
+EOF
+
+ls /tmp/smb/smb.d/* | sed -e 's/^/include = /' > /tmp/smb/includes.conf
+smbcontrol all reload-config
+else
+   if [ $# -le 1 ] ; then
+      echo "not enough arguments supplied $0 $1 What do I delete?"
+    return 1
+   fi
+   rm /tmp/smb/smb.d/$2.conf
+   ls /tmp/smb/smb.d/* | sed -e 's/^/include = /' > /tmp/smb/includes.conf >/dev/null 2>&1
+   smbcontrol all reload-config
+fi
+
+
+echo $ACTION $DEVICE $MOUNTPOUNT
+return 0
+

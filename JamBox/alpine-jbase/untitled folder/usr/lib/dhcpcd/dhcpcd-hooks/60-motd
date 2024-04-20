@@ -1,0 +1,10 @@
+#!/bin/sh
+set_motd()
+{
+  /etc/profile.d/motd.sh
+}
+if $if_up; then
+  set_motd
+elif $if_down; then
+  set_motd
+fi

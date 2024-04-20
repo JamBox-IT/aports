@@ -1,0 +1,8 @@
+#!/bin/sh
+#
+# Copyright Corey DeLasaux <cordelster@gmail.com> 2018
+#
+#
+if [ $interface == wlan0 ]; then
+        macchanger -ae wlan0
+fi

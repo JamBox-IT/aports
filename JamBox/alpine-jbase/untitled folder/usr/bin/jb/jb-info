@@ -1,0 +1,4 @@
+#!/bin/sh
+/etc/profile.d/motd.sh
+cat /etc/motd
+exit 0
