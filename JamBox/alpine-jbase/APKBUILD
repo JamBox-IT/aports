@@ -13,6 +13,7 @@ depends="$pkgname-data=$pkgver-r$pkgrel dhcpcd"
 subpackages="$pkgname-data"
 install="$pkgname.post-install"
 _nbver=6.4
+
 source="init-jb.sh
 	motd.sh
 	g-usb.conf
