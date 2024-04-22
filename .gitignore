@@ -24,3 +24,23 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Build/edit specific/related
+*.apk
+*.gz
+*.tgz
+*.bz2
+*.tbz2
+*.zip
+*.tags
+*.xz
+*.part
+*.tar
+src
+pkg
+pkg-*
+tmp
+build.log
+core
+!core/
+.vscode/
