@@ -1,0 +1,37 @@
+# Contributor: 
+# Maintainer: 
+pkgname=py3-bleak
+_pkgreal=bleak
+pkgver=0.21.1
+pkgrel=0
+pkgdesc="Bluetooth Low Energy platform Agnostic Klient"
+url="http://packages.python.org/pypi/bleak"
+arch="noarch"
+license="MIT"
+depends="python3 py3-dbus_fast"
+checkdepends="python3-dev"
+makedepends="py3-setuptools py3-gpep517 py3-wheel py3-poetry-core py3-poetry-core-pyc"
+source="https://files.pythonhosted.org/packages/6a/c0/3aca655fa43b8ff5340d99fac4e67061f53f42f092fc847bdd0559d67846/bleak-0.21.1.tar.gz"
+builddir="$srcdir/$_pkgreal-$pkgver"
+options="!check"
+
+build() {
+	gpep517 build-wheel \
+		--wheel-dir .dist \
+		--output-fd 3 3>&1 >&2
+}
+
+check() {
+	python3 -m venv --clear --without-pip --system-site-packages .testenv
+	.testenv/bin/python3 -m installer .dist/*.whl
+	.testenv/bin/python3 -m pytest
+}
+
+package() {
+	python3 -m installer -d "$pkgdir" \
+		.dist/*.whl
+}
+
+sha512sums="
+a312dc1de52d43a841fc5a6b0b5704b1d6a44b33ec321d82fe1e055a179a9fb545a222309df03acff53ac0e153b378f149c2ef73df45692c4380d154bec62c76  bleak-0.21.1.tar.gz
+"

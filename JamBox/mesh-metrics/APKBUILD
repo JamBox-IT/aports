@@ -1,0 +1,73 @@
+# Contributor: Corey DeLasaux <cordelster@gmail.com> 
+# Maintainer: Corey DeLasaux <cordelster@gmail.com>
+pkgname=mesh-metrics
+pkgver=0.93
+pkgrel=1
+pkgdesc="Shell script for collectig metrics from Meshtastic repeaters"
+url="https://github.com/cordelster/mesh-metrics"
+arch="noarch"
+license="GNUGPL-3.0-only"
+depends="bash"
+checkdepends=""
+makedepends=""
+options="!check"
+subpackages="$pkgname-grafana_dash $pkgname-grafana_rules"
+source="$pkgname-$pkgver.tar.gz::https://github.com/cordelster/mesh-metrics/archive/refs/tags/v$pkgver.tar.gz"
+builddir="$srcdir/$pkgname-$pkgver"
+#builddir="$srcdir/build"
+
+prepare() {
+	default_prepare
+	mkdir -p "$builddir"
+}
+
+build() {
+return 0
+}
+
+check() {
+	return 0
+}
+
+package() {
+	mkdir -p "$pkgdir"
+	cd $pkgdir
+	install -m 0755 -d \
+		usr \
+		usr/bin \
+		var \
+		var/lib \
+		var/lib/grafana \
+		var/lib/grafana/provisioning \
+		var/lib/grafana/provisioning/dashboards \
+		var/lib/grafana/provisioning/notifiers \
+		var/lib/grafana/provisioning/dashboards/Meshtastic \
+		var/lib/grafana/provisioning/notifiers/Meshtastic
+
+
+
+
+
+
+                install -m554 "$builddir"/scripts/mesh_metrics.sh "$pkgdir"/usr/bin/mesh_metrics.sh
+#		install -m554 "$builddir"/scripts/mesh_metrics.sh "$pkgdir"/usr/local/bin/mesh_metrics.sh
+		install -m664 "$builddir"/scripts/Meshtastic_Repeaters\ Telemetry-1711147865621.json \
+			"$pkgdir"/var/lib/grafana/provisioning/dashboards/Meshtastic/Meshtastic_Repeaters_Telemetry-1711147865621.json 
+		install -m664 "$builddir"/scripts/Meshtastic_Alertrules.yaml \
+                        "$pkgdir"/var/lib/grafana/provisioning/notifiers/Meshtastic/Meshtastic_Alertrules.yaml
+}
+
+grafana_dash() { 
+	pkgdesc="$pkgname Grafana dashboard for Meshtastic polled repeaters"
+	depends="grafana"
+	amove var/lib/grafana/provisioning/dashboards/Meshtastic/Meshtastic_Repeaters_Telemetry-1711147865621.json 
+}
+
+grafana_rules() {
+	pkgdesc="$pkgname Grafana alert rules for Meshtastic"
+	depends="grafana"
+	amove var/lib/grafana/provisioning/notifiers/Meshtastic/Meshtastic_Alertrules.yaml
+}
+sha512sums="
+b56defe5752ea3c44e503d918e37b644ce53d563ae93a0e2188db25d10bac0de062feb0f1d338245323970eeba5afb05e6557c45532ed301c3b0bf266aaed6c4  mesh-metrics-0.93.tar.gz
+"

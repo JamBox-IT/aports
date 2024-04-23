@@ -1,0 +1,37 @@
+
+# Contributor: 
+# Maintainer: 
+pkgname=py3-modulegraph
+_pkgreal=modulegraph
+pkgver=0.19.6
+pkgrel=0
+pkgdesc="Python module dependency analysis tool"
+url="http://packages.python.org/pypi/modulegraph"
+arch="noarch"
+license="MIT"
+depends="python3"
+checkdepends="python3-dev"
+makedepends="py3-setuptools"
+source="https://files.pythonhosted.org/packages/12/7a/7d1ef5824553c960b441b937dd26a0f99ea04a8c29a5ed099b7c06e9ef61/modulegraph-0.19.6.tar.gz"
+builddir="$srcdir/$_pkgreal-$pkgver"
+options="!check"
+
+build() {
+	python3 setup.py build
+}
+
+check() {
+	python3 setup.py test
+}
+
+package() {
+	PYTHONPATH=$pkgdir$(python3 -c "import site; print(site.getsitepackages()[0])") \
+	python3 setup.py install \
+		--prefix=/usr \
+		--root="$pkgdir" \
+		--single-version-externally-managed
+}
+
+sha512sums="
+ab8596f1ebedf691c132338d11b9fe08b09cb6714241af0e569718b0e283ac816b6bc50f5f49a90809661282ace4d3cb6d49fe9c863f4cb4073c471e353c9239  modulegraph-0.19.6.tar.gz
+"

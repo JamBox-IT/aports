@@ -1,0 +1,35 @@
+# Contributor: 
+# Maintainer: 
+pkgname=py3-pip
+_pkgreal=pip
+pkgver=24.0
+pkgrel=0
+pkgdesc="The PyPA recommended tool for installing Python packages."
+url="http://packages.python.org/pypi/pip"
+arch="noarch"
+license="MIT"
+depends="python3"
+checkdepends="python3-dev"
+makedepends="py3-setuptools"
+source="https://files.pythonhosted.org/packages/94/59/6638090c25e9bc4ce0c42817b5a234e183872a1129735a9330c472cc2056/pip-24.0.tar.gz"
+builddir="$srcdir/$_pkgreal-$pkgver"
+
+build() {
+	python3 setup.py build
+}
+
+check() {
+	python3 setup.py test
+}
+
+package() {
+	PYTHONPATH=$pkgdir$(python3 -c "import site; print(site.getsitepackages()[0])") \
+	python3 setup.py install \
+		--prefix=/usr \
+		--root="$pkgdir" \
+		--single-version-externally-managed
+}
+
+sha512sums="
+b687d9e7e2b0348a1c3355610bcf4e194dd157dc6e79638f8a0a383cf1ba7c4253be4b145e9a5029e089807d1feec9e444976f34f77a732f3ef527d9bc6bcebf  pip-24.0.tar.gz
+"

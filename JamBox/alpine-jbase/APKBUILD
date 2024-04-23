@@ -1,10 +1,10 @@
 # Contributor: Corey DeLasaux <cordelster@gmail.com>
 # Maintainer: Corey DeLasaux <cordelster@gmail.com>
-pkgname=alpine-jbaselayout
+pkgname=alpine-jbase
 pkgver=3.6.2
-pkgrel=1
+pkgrel=2
 pkgdesc="Alpine base dir structure and init scripts"
-url="https:noneya.com"
+url="https://github.com/JamBox-IT"
 arch="noarch"
 license="GNUGPL-3.0-only"
 pkggroups="shadow"
@@ -14,13 +14,9 @@ subpackages="$pkgname-data"
 install="$pkgname.post-install"
 _nbver=6.4
 
-source="init-jb.sh
-	motd.sh
-	g-usb.conf
-	ap.conf
-	hostname
-	usb.conf
-	"
+source="source="$pkgname-$pkgver.tar.gz::https://github.com/cordelster/$pkgname/archive/refs/tags/v$pkgver.tar.gz"
+
+
 builddir="$srcdir/build"
 
 prepare() {
@@ -30,16 +26,16 @@ prepare() {
 }
 
 build() {
-return 0
+	make all
 }
 
 data() {
-	replaces="alpine-jbaselayout"
-	depends=
+#	replaces="alpine-jbaselayout"
+#	depends=
 
 #	install -d -m 0555 etc/profile.d
 
-#	install -m644 \
+#	install -m5644 \
 #		"$srcdir"/init-jb.sh \
 #		"$srcdir"/motd.sh \
 #		"$pkgdir"/etc/profile.d/
@@ -48,7 +44,7 @@ data() {
 #		"$srcdir"/ap.conf \
 #		"$srcdir"/usb.conf \
 #		"$pkgdir"/etc/dnsmasq.d
-	amove etc/dnsmasq.d
+#	amove etc/dnsmasq.d
 		
 
 }
@@ -64,10 +60,10 @@ package() {
 		etc/modules-load.d \
 		etc/profile.d
  
-	install -m755 "$srcdir"/init-jb.sh "$pkgdir"/etc/profile.d/init-jb.sh
-        install -m755 "$srcdir"/motd.sh "$pkgdir"/etc/profile.d/motd.sh
+	install -m5755 "$srcdir"/init-jb.sh "$pkgdir"/etc/profile.d/init-jb.sh
+        install -m5755 "$srcdir"/motd.sh "$pkgdir"/etc/profile.d/motd.sh
 	install -m600 "$srcdir"/g-usb.conf "$pkgdir"/etc/modules-load.d/g-usb.conf
-	install -m550 "$srcdir"/hostname "$pkgdir"/etc/conf.d/hostname
+	install -m5750 "$srcdir"/hostname "$pkgdir"/etc/conf.d/hostname
 	
         install -m644 \
                 "$srcdir"/ap.conf \
@@ -77,11 +73,6 @@ package() {
 }
 
 sha512sums="
-f62ec12383830239d53941c31f28c478d774a7e5e7db1a839d6302a9b2306d2f27ced62165c1865807a953288260e0c4baedb8a56dde82fadca9d1cf6bc3f4f6  ap.conf
-c4086eb5db57a34fbe1dfc5b4e24c53ac3b6af7144588e1ad547e91a9621b4504fc4d3416300c129856230cf71e2d67289107935026c81db3a08a6bdcd710174  g-usb.conf
-e310107ec0c6928a1f81838345dd8a8b0c0e5d2aa51d2e312e3d4d0efda0e503ca33e0a0e54224981b6fb74ea8a57146a1910746faaa1ebb73e62bdce4202f7c  hostname
-761a8301cf130c415b937ea19e47e792f91a4d1ea42693e0e3704800fa6eda47d251f2981821e1e5fba98eac01bac755af1b08ca6c92c0d3b559dbc5d49316e6  init-jb.sh
-2c98f783d497969f9365384bcf7847ebbe410acd09719b64c34a27b46712fb000a5d4430df42e1d0f1090ce4b719cd735d68b44abb0a69eefa4b9a26ae7a127a  motd.sh
-c3f9397bf085cfd7b6a2a31c82ba6fed70d85a7e7cd13de85d47cf3baf4990bb5e939adc5d6c18d5cc9c1a7311aa2d10802b995b03e98ecbf903b375eb52c833  usb.conf
+13ad78faf05128c959b2ea47faedb40970d616eec5024b92026a87a5078b2829f0345ce96af4f9ab2015f2ce903b2fe2bea89024734a2dfad4aed7c3dd332bcf  alpine-jbase-3.6.2.tar.gz
 "
 
