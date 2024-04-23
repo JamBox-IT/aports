@@ -10,13 +10,12 @@ license="GNUGPL-3.0-only"
 pkggroups="shadow"
 options="!fhs !check"
 depends="$pkgname-data=$pkgver-r$pkgrel dhcpcd"
+makedepends="make"
 subpackages="$pkgname-data"
 install="$pkgname.post-install"
 _nbver=6.4
 
-source="source="$pkgname-$pkgver.tar.gz::https://github.com/cordelster/$pkgname/archive/refs/tags/v$pkgver.tar.gz"
-
-
+source="$pkgname-$pkgver.tar.gz::https://github.com/JamBox-IT/$pkgname/archive/refs/tags/v$pkgver.tar.gz"
 builddir="$srcdir/build"
 
 prepare() {
@@ -46,7 +45,7 @@ data() {
 #		"$pkgdir"/etc/dnsmasq.d
 #	amove etc/dnsmasq.d
 		
-
+return 0
 }
 
 package() {
@@ -71,8 +70,6 @@ package() {
                 "$pkgdir"/etc/dnsmasq.d/
 		
 }
-
 sha512sums="
 13ad78faf05128c959b2ea47faedb40970d616eec5024b92026a87a5078b2829f0345ce96af4f9ab2015f2ce903b2fe2bea89024734a2dfad4aed7c3dd332bcf  alpine-jbase-3.6.2.tar.gz
 "
-
