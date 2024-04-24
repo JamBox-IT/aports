@@ -16,7 +16,24 @@ install="$pkgname.post-install"
 _nbver=6.4
 
 source="$pkgname-$pkgver.tar.gz::https://github.com/JamBox-IT/$pkgname/archive/refs/tags/v$pkgver.tar.gz"
-builddir="$srcdir/build"
+builddir="$srcdir/$pkgname-$pkgver"
+
+_giturl="https://github.com/JamBox-IT/alpine-jbase"
+_gittag="v$pkgver"
+
+snapshot() {
+	mkdir -p "$srcdir"
+	cd "${SRCDEST:-$srcdir}"
+	if ! [ -d $pkgname.git ]; then
+		git clone --bare  $_giturl || return 1
+		cd $_pkgname-fb.git
+	else
+		cd $pkgname.git
+		git fetch || return 1
+	fi
+	git archive --prefix=$pkgname/ -o "$SRCDEST"/$pkgname-$pkgver.tar.gz $_gittag
+#	scp "$SRCDEST"/$pkgname-$pkgver.tar.gz dev.jambox-it.org:/archive/$pkgname/
+}
 
 prepare() {
 	default_prepare
