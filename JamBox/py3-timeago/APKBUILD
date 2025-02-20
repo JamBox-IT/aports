@@ -11,6 +11,7 @@ license="MIT"
 depends="python3"
 checkdepends="python3-dev"
 makedepends="py3-setuptools py3-gpep517 py3-wheel python3-dev py3-distlib"
+subpackages="$pkgname-pyc"
 source="$_realname-$pkgver.tar.gz::https://github.com/hustcc/timeago/archive/refs/tags/1.0.16.tar.gz
 	do_test.sh.patch"
 builddir="$srcdir/$_realname-$pkgver"
