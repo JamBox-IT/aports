@@ -3,7 +3,7 @@
 pkgname=py3-pyqrcode
 _pkgreal=PyQRCode
 pkgver=1.2.1
-pkgrel=0
+pkgrel=1
 pkgdesc="A QR code generator written purely in Python with SVG, EPS, PNG and terminal output."
 url="http://packages.python.org/pypi/PyQRCode"
 arch="noarch"
@@ -11,6 +11,7 @@ license="BSD"
 depends="python3"
 checkdepends="python3-dev"
 makedepends="py3-setuptools"
+subpackages="$pkgname-pyc"
 source="https://files.pythonhosted.org/packages/37/61/f07226075c347897937d4086ef8e55f0a62ae535e28069884ac68d979316/PyQRCode-1.2.1.tar.gz"
 builddir="$srcdir/$_pkgreal-$pkgver"
 
