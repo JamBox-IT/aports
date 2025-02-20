@@ -12,32 +12,32 @@ depends="python3"
 checkdepends="python3-dev"
 makedepends="py3-setuptools py3-gpep517 py3-wheel python3-dev py3-distlib"
 source="$_realname-$pkgver.tar.gz::https://github.com/hustcc/timeago/archive/refs/tags/1.0.16.tar.gz
-	do_test.sh.patch""
+	do_test.sh.patch"
 builddir="$srcdir/$_realname-$pkgver"
 options="!check"
 
 build() {
-#	python3 setup.py build
-	gpep517 build-wheel \
-		--wheel-dir .dist \
-		--output-fd 3 3>&1 >&2
+	python3 setup.py build
+#	gpep517 build-wheel \
+#		--wheel-dir .dist \
+#		--output-fd 3 3>&1 >&2
 }
 
 check() {
-#	python3 setup.py test
-	python3 -m venv --clear --without-pip --system-site-packages .testenv
-	.testenv/bin/python3 -m installer .dist/*.whl
-	.testenv/bin/python3 -m pytest
+	python3 setup.py test
+#	python3 -m venv --clear --without-pip --system-site-packages .testenv
+#	.testenv/bin/python3 -m installer .dist/*.whl
+#	.testenv/bin/python3 -m pytest
 }
 
 package() {
-#	PYTHONPATH=$pkgdir$(python3 -c "import site; print(site.getsitepackages()[0])") \
-#	python3 setup.py install \
-#		--prefix=/usr \
-#		--root="$pkgdir" \
-#		--single-version-externally-managed
-	python3 -m installer -d "$pkgdir" \
-		.dist/*.whl
+	PYTHONPATH=$pkgdir$(python3 -c "import site; print(site.getsitepackages()[0])") \
+	python3 setup.py install \
+		--prefix=/usr \
+		--root="$pkgdir" \
+		--single-version-externally-managed
+#	python3 -m installer -d "$pkgdir" \
+#		.dist/*.whl
 }
 
 sha512sums="
