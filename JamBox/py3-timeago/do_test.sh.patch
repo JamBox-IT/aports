@@ -1,5 +1,6 @@
---- do_test.sh.org	2025-02-20 01:30:48
-+++ do_test.sh	2025-02-20 01:31:19
+diff -Naur a/test/do_test.sh b/test/do_test.sh
+--- a/test/do_test.sh	2025-02-20 01:30:48
++++ b/test/do_test.sh	2025-02-20 01:31:19
 @@ -1,6 +1,6 @@
  #!/bin/bash
  
