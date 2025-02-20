@@ -3,7 +3,7 @@
 pkgname=py3-typing-extensions
 _pkgreal=typing_extensions
 pkgver=4.10.0
-pkgrel=0
+pkgrel=1
 pkgdesc="Backported and Experimental Type Hints for Python 3.8+"
 provides=""
 replaces=""
@@ -11,7 +11,7 @@ url="https://github.com/python/typing_extensions"
 arch="noarch"
 license="PSFL"
 depends="python3"
-checkdepends="python3-dev py3-ruff"
+checkdepends="python3-dev py3-pytest py3-ruff"
 makedepends="py3-setuptools py3-gpep517 py3-wheel py3-flit-core"
 subpackages="$pkgname-pyc"
 source="https://files.pythonhosted.org/packages/16/3a/0d26ce356c7465a19c9ea8814b960f8a36c3b0d07c323176620b7b483e44/typing_extensions-4.10.0.tar.gz"
