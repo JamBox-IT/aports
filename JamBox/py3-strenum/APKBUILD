@@ -4,7 +4,7 @@
 pkgname=py3-strenum
 _pkgreal=StrEnum
 pkgver=0.4.15
-pkgrel=0
+pkgrel=1
 pkgdesc="An Enum that inherits from str."
 url="http://packages.python.org/pypi/StrEnum"
 arch="noarch"
@@ -12,6 +12,7 @@ license="MIT"
 depends="python3"
 checkdepends="python3-dev py3-pytest py3-pytest-cov"
 makedepends="py3-setuptools py3-wheel py3-gpep517 py3-gpep517-pyc python3-dev py3-pip-tools"
+subpackages="$pkgname-pyc"
 source="https://files.pythonhosted.org/packages/85/ad/430fb60d90e1d112a62ff57bdd1f286ec73a2a0331272febfddd21f330e1/StrEnum-0.4.15.tar.gz"
 builddir="$srcdir/$_pkgreal-$pkgver"
 options="!check"
