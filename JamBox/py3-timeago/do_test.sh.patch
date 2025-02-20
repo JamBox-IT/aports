@@ -1,0 +1,10 @@
+--- do_test.sh.org	2025-02-20 01:30:48
++++ do_test.sh	2025-02-20 01:31:19
+@@ -1,6 +1,6 @@
+ #!/bin/bash
+ 
+-python test/testcase.py
++python3 test/testcase.py
+ 
+ # flake8 --format=pylint --max-line-length=120 --ignore=F403 --builtins=_ \
+ # $(find src/timeago/ -name "*.py" -print)
