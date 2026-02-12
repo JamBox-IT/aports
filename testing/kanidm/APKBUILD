@@ -41,6 +41,7 @@ subpackages="
 	$pkgname-server
 	$pkgname-unixd-clients:unixd_clients
 	$pkgname-zsh-completion
+	$pkgname-rlm_python
 	"
 source="$pkgname-$pkgver.tar.gz::https://github.com/kanidm/kanidm/archive/refs/tags/v$pkgver.tar.gz
 	initgroups-hooks.patch
@@ -150,12 +151,18 @@ radiusd() {
 	depends="python3 freeradius freeradius-python $pkgname-clients"
 
 	# Install the Python RADIUS module
-	install -Dm644 "$builddir"/rlm_python/mods-available/python "$subpkgdir"/etc/raddb/mods-available/kanidm
+	install -Dm644 "$builddir"/rlm_python/mods-available/python3 "$subpkgdir"/etc/raddb/mods-available/kanidm
 	install -Dm644 "$builddir"/rlm_python/sites-available/default "$subpkgdir"/etc/raddb/sites-available/kanidm-default
-	install -Dm755 "$builddir"/rlm_python/radius_entrypoint.py "$subpkgdir"/usr/lib/kanidm/radius/radius_entrypoint.py
+	
+}
 
+rlm_python() {
+	pkgdesc="Kanidm python module"
+	depends="python3 $pkgname-clients"
+	
 	# Copy Python module files
 	install -dm755 "$subpkgdir"/usr/lib/kanidm/radius/
+	install -Dm755 "$builddir"/rlm_python/radius_entrypoint.py "$subpkgdir"/usr/lib/kanidm/radius/radius_entrypoint.py
 	cp -r "$builddir"/rlm_python/*.py "$subpkgdir"/usr/lib/kanidm/radius/ 2>/dev/null || true
 }
 
