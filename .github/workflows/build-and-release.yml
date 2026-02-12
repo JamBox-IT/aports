@@ -97,6 +97,14 @@ jobs:
           chown -R runner:abuild /var/cache/distfiles
           chmod -R 775 /var/cache/distfiles
 
+      - name: Install public key to trusted keys
+        shell: alpine.sh --root {0}
+        run: |
+          # Install public key to system trusted keys
+          echo "${{ secrets.RSA_PUBLIC_KEY }}" > /etc/apk/keys/jambox.rsa.pub
+          chmod 644 /etc/apk/keys/jambox.rsa.pub
+          ls -la /etc/apk/keys/
+
       - name: Configure abuild
         shell: alpine.sh {0}
         run: |
