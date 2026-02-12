@@ -279,3 +279,36 @@ jobs:
           name: final-release-packages
           path: packages/
           retention-days: 90
+
+      - name: Create Alpine repository structure
+        run: |
+          # Install apk-tools for creating APKINDEX
+          sudo apt-get update && sudo apt-get install -y alpine-sdk
+
+          # Create repository directory structure
+          mkdir -p alpine-repo/JamBox
+
+          # Organize packages by architecture with APKINDEX
+          for arch in x86_64 aarch64 armv7 armhf; do
+            if [ -d "packages" ] && ls packages/*-${arch}.apk 2>/dev/null; then
+              mkdir -p alpine-repo/JamBox/${arch}
+              cp packages/*-${arch}.apk alpine-repo/JamBox/${arch}/ || true
+
+              # Create APKINDEX
+              cd alpine-repo/JamBox/${arch}
+              apk index -o APKINDEX.tar.gz *.apk
+              abuild-sign -k ~/.abuild/*.rsa APKINDEX.tar.gz || echo "Signing skipped"
+              cd ../../..
+            fi
+          done
+
+          ls -laR alpine-repo/
+
+      - name: Publish to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./alpine-repo
+          publish_branch: gh-pages
+          keep_files: true
+          destination_dir: packages
