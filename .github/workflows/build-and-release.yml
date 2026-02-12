@@ -204,17 +204,18 @@ jobs:
         shell: alpine.sh {0}
         if: success()
         run: |
-          mkdir -p /tmp/packages/${{ matrix.arch }}
-          find ~/packages -name "*.apk" -type f -exec cp {} /tmp/packages/${{ matrix.arch }}/ \; 2>/dev/null || true
-          find ~/packages -name "*.apk.asc" -type f -exec cp {} /tmp/packages/${{ matrix.arch }}/ \; 2>/dev/null || true
-          ls -la /tmp/packages/${{ matrix.arch }}/ || echo "No packages built"
+          # Copy packages to a location accessible outside chroot
+          WORKSPACE="${GITHUB_WORKSPACE:-/home/runner/work/aports/aports}"
+          mkdir -p "$WORKSPACE/packages/${{ matrix.arch }}"
+          find ~/packages -name "*.apk" -type f -exec cp {} "$WORKSPACE/packages/${{ matrix.arch }}/" \; 2>/dev/null || true
+          ls -la "$WORKSPACE/packages/${{ matrix.arch }}/" || echo "No packages built"
 
       - name: Upload build artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: packages-${{ matrix.arch }}
-          path: /tmp/packages/${{ matrix.arch }}/
+          path: packages/${{ matrix.arch }}/
           retention-days: 30
 
   create-release:
