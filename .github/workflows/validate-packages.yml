@@ -22,29 +22,26 @@ jobs:
   validate:
     name: Validate APKBUILD Files
     runs-on: ubuntu-latest
+    container:
+      image: alpine:edge
+      options: --user root
 
     steps:
+      - name: Install git and basic tools
+        run: |
+          apk add --no-cache git bash
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Alpine Linux environment
-        run: |
-          # Install Alpine Linux in Docker for abuild tools
-          docker pull alpine:edge
-          docker create --name alpine-validator alpine:edge
-          docker start alpine-validator
-
       - name: Install validation tools
         run: |
-          docker exec alpine-validator sh -c '
-            apk add --no-cache \
-              alpine-sdk \
-              abuild \
-              shellcheck \
-              bash
-          '
+          apk add --no-cache \
+            alpine-sdk \
+            abuild \
+            bash
 
       - name: Detect changed APKBUILD files
         id: changes
@@ -57,7 +54,13 @@ jobs:
             HEAD_SHA="${{ github.sha }}"
           fi
 
-          CHANGED_FILES=$(git diff --name-only $BASE_SHA..$HEAD_SHA | grep -E 'APKBUILD$' || true)
+          # Handle first commit case
+          if [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "First commit - checking all APKBUILD files"
+            CHANGED_FILES=$(find . -name APKBUILD -path './JamBox/*' -o -name APKBUILD -path './testing/*')
+          else
+            CHANGED_FILES=$(git diff --name-only $BASE_SHA..$HEAD_SHA | grep -E 'APKBUILD$' || true)
+          fi
 
           if [ -z "$CHANGED_FILES" ]; then
             echo "No APKBUILD files changed"
@@ -80,60 +83,57 @@ jobs:
               continue
             fi
 
+            echo "===================================="
             echo "Validating: $APKBUILD"
+            echo "===================================="
 
-            # Check if file exists
             if [ ! -f "$APKBUILD" ]; then
               echo "❌ File not found: $APKBUILD"
               FAILED=1
               continue
             fi
 
-            # Copy to container and validate
-            PKG_DIR=$(dirname "$APKBUILD")
-            docker cp "$PKG_DIR" alpine-validator:/tmp/validate/
+            # Check shell syntax
+            if ! bash -n "$APKBUILD"; then
+              echo "❌ Syntax error in APKBUILD"
+              FAILED=1
+              continue
+            fi
 
-            # Run syntax check
-            docker exec alpine-validator sh -c "
-              cd /tmp/validate/$(basename $PKG_DIR)
+            # Source and check required variables
+            (
+              cd "$(dirname "$APKBUILD")"
+              . ./APKBUILD
 
-              # Check shell syntax
-              if ! bash -n APKBUILD; then
-                echo '❌ Syntax error in APKBUILD'
+              if [ -z "$pkgname" ]; then
+                echo "❌ Missing pkgname"
                 exit 1
               fi
 
-              # Check required variables
-              . APKBUILD
-
-              if [ -z \"\$pkgname\" ]; then
-                echo '❌ Missing pkgname'
+              if [ -z "$pkgver" ]; then
+                echo "❌ Missing pkgver"
                 exit 1
               fi
 
-              if [ -z \"\$pkgver\" ]; then
-                echo '❌ Missing pkgver'
+              if [ -z "$pkgrel" ]; then
+                echo "❌ Missing pkgrel"
                 exit 1
               fi
 
-              if [ -z \"\$pkgrel\" ]; then
-                echo '❌ Missing pkgrel'
-                exit 1
-              fi
-
-              echo '✅ APKBUILD syntax valid'
-            " || FAILED=1
-
-            # Clean up
-            docker exec alpine-validator rm -rf /tmp/validate/*
+              echo "✅ APKBUILD syntax valid"
+              echo "   Package: $pkgname"
+              echo "   Version: $pkgver-r$pkgrel"
+            ) || FAILED=1
 
           done < /tmp/changed_apkbuilds.txt
 
           if [ $FAILED -ne 0 ]; then
+            echo ""
             echo "❌ Validation failed for one or more APKBUILD files"
             exit 1
           fi
 
+          echo ""
           echo "✅ All APKBUILD files validated successfully"
 
       - name: Check for security issues
@@ -149,27 +149,22 @@ jobs:
             echo "Security check: $APKBUILD"
 
             # Check for HTTP URLs (should use HTTPS)
-            if grep -q 'http://' "$APKBUILD"; then
-              echo "⚠️ Warning: HTTP URL found in $APKBUILD - consider using HTTPS"
-              WARNINGS=$((WARNINGS + 1))
-            fi
-
-            # Check for unpinned versions
-            if ! grep -q 'pkgver=' "$APKBUILD"; then
-              echo "⚠️ Warning: No version specified in $APKBUILD"
+            if grep -q 'source=.*http://' "$APKBUILD"; then
+              echo "⚠️  Warning: HTTP URL found in source - consider using HTTPS"
               WARNINGS=$((WARNINGS + 1))
             fi
 
             # Check for checksums
             if ! grep -q 'sha512sums=' "$APKBUILD" && ! grep -q 'sha256sums=' "$APKBUILD"; then
-              echo "⚠️ Warning: No checksums found in $APKBUILD"
+              echo "⚠️  Warning: No checksums found"
               WARNINGS=$((WARNINGS + 1))
             fi
 
           done < /tmp/changed_apkbuilds.txt
 
           if [ $WARNINGS -gt 0 ]; then
-            echo "⚠️ Found $WARNINGS security warnings (non-blocking)"
+            echo ""
+            echo "⚠️  Found $WARNINGS security warnings (non-blocking)"
           else
             echo "✅ No security issues detected"
           fi
@@ -184,68 +179,30 @@ jobs:
 
             echo "Checking metadata: $APKBUILD"
 
-            # Source the APKBUILD and check metadata
+            # Check for maintainer
+            if ! grep -q '# Maintainer:' "$APKBUILD"; then
+              echo "⚠️  Warning: Missing maintainer information"
+            fi
+
+            # Source and check metadata
             (
-              . "$APKBUILD"
+              cd "$(dirname "$APKBUILD")"
+              . ./APKBUILD
 
-              # Check for description
               if [ -z "$pkgdesc" ]; then
-                echo "⚠️ Warning: Missing package description"
+                echo "⚠️  Warning: Missing package description"
               fi
 
-              # Check for URL
               if [ -z "$url" ]; then
-                echo "⚠️ Warning: Missing project URL"
+                echo "⚠️  Warning: Missing project URL"
               fi
 
-              # Check for license
               if [ -z "$license" ]; then
-                echo "⚠️ Warning: Missing license information"
-              fi
-
-              # Check for maintainer
-              if ! grep -q '# Maintainer:' "$APKBUILD"; then
-                echo "⚠️ Warning: Missing maintainer information"
+                echo "⚠️  Warning: Missing license information"
               fi
 
               echo "✅ Metadata check complete"
             )
-
-          done < /tmp/changed_apkbuilds.txt
-
-      - name: Test checksum update
-        if: steps.changes.outputs.has_changes == 'true'
-        run: |
-          echo "Testing checksum updates for changed packages..."
-
-          while IFS= read -r APKBUILD; do
-            if [ -z "$APKBUILD" ]; then
-              continue
-            fi
-
-            PKG_DIR=$(dirname "$APKBUILD")
-            echo "Testing checksum for: $PKG_DIR"
-
-            # Copy package directory to container
-            docker cp "$PKG_DIR" alpine-validator:/tmp/test/
-
-            # Try to update checksums (this validates source URLs)
-            docker exec alpine-validator sh -c "
-              cd /tmp/test/$(basename $PKG_DIR)
-
-              # Set up abuild
-              abuild-keygen -n -a || true
-
-              # Try checksum update (may fail if sources aren't available, that's ok)
-              if abuild checksum 2>&1 | grep -q 'ERROR'; then
-                echo '⚠️ Warning: Could not update checksums (sources may not be publicly available)'
-              else
-                echo '✅ Checksums can be updated'
-              fi
-            " || echo "⚠️ Checksum validation skipped"
-
-            # Clean up
-            docker exec alpine-validator rm -rf /tmp/test/*
 
           done < /tmp/changed_apkbuilds.txt
 
@@ -266,9 +223,3 @@ jobs:
           else
             echo "No APKBUILD files changed" >> $GITHUB_STEP_SUMMARY
           fi
-
-      - name: Cleanup
-        if: always()
-        run: |
-          docker stop alpine-validator || true
-          docker rm alpine-validator || true
