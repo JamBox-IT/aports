@@ -124,10 +124,16 @@ jobs:
 
       - name: Build packages for ${{ matrix.arch }}
         shell: alpine.sh {0}
-        working-directory: /home/runner/work/aports
         run: |
           PACKAGES='${{ needs.detect-changes.outputs.packages }}'
           BUILD_FAILED=0
+
+          # Find the actual repository path
+          REPO_PATH="${GITHUB_WORKSPACE:-/home/runner/work/aports/aports}"
+          cd "$REPO_PATH" || exit 1
+          echo "Repository path: $REPO_PATH"
+          echo "Current directory: $(pwd)"
+          ls -la
 
           echo "Building packages for arch: ${{ matrix.arch }}"
           echo "Packages to build: $PACKAGES"
@@ -168,7 +174,7 @@ jobs:
               echo "SKIP: Package not configured for ${{ matrix.arch }}"
             fi
 
-            cd /home/runner/work/aports || exit 1
+            cd "$REPO_PATH" || exit 1
           done
 
           if [ $BUILD_FAILED -ne 0 ]; then
@@ -180,7 +186,6 @@ jobs:
         shell: alpine.sh {0}
         continue-on-error: true
         run: |
-          cd /home/runner/work/aports
           # Find and sign any unsigned packages
           find ~/packages -name "*.apk" -type f 2>/dev/null | while read -r pkg; do
             echo "Signing: $pkg"
