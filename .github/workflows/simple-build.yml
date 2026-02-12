@@ -1,7 +1,8 @@
 name: Simple Alpine Build
 
-# Lightweight alternative if the main build workflow is too complex
-# Use this if you only need to build for x86_64 initially
+# DISABLED: Using build-and-release.yml instead (multi-arch + GitHub Pages publishing)
+# This workflow is kept for reference/testing purposes
+# To re-enable: change 'if: false' to 'if: true' below
 
 on:
   push:
@@ -19,6 +20,7 @@ jobs:
   build:
     name: Build Packages
     runs-on: ubuntu-latest
+    if: false  # Disabled - using build-and-release.yml instead
 
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +55,7 @@ jobs:
         shell: alpine.sh {0}
         run: |
           # Create build directories
-          mkdir -p ~/.abuild /var/cache/distfiles /tmp/packages
+          mkdir -p ~/.abuild /var/cache/distfiles
 
           # Setup RSA keys
           cat > ~/.abuild/jambox.rsa << 'EOF'
@@ -133,23 +135,26 @@ jobs:
         shell: alpine.sh {0}
         if: success()
         run: |
-          find ~/packages -name "*.apk" -type f -exec cp {} /tmp/packages/ \;
-          find ~/packages -name "*.apk.asc" -type f -exec cp {} /tmp/packages/ \; 2>/dev/null || true
-          ls -lh /tmp/packages/
+          # Copy packages to location accessible outside chroot
+          WORKSPACE="${GITHUB_WORKSPACE:-/home/runner/work/aports/aports}"
+          mkdir -p "$WORKSPACE/packages"
+          find ~/packages -name "*.apk" -type f -exec cp {} "$WORKSPACE/packages/" \; 2>/dev/null || true
+          find ~/packages -name "*.apk.asc" -type f -exec cp {} "$WORKSPACE/packages/" \; 2>/dev/null || true
+          ls -lh "$WORKSPACE/packages/" || echo "No packages built"
 
       - name: Upload Artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: packages
-          path: /tmp/packages/
+          path: packages/
           retention-days: 30
 
       - name: Create Release
         if: success()
         uses: softprops/action-gh-release@v1
         with:
-          files: /tmp/packages/*.apk*
+          files: packages/*.apk*
           tag_name: build-${{ github.run_number }}
           generate_release_notes: true
         env:
