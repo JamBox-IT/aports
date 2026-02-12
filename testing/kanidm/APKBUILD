@@ -1,7 +1,7 @@
 maintainer="Corey DeLasaux <cordelster@gmail.com>"
 pkgname=kanidm
 pkgver=1.8.6
-pkgrel=0
+pkgrel=1
 pkgdesc="A simple, secure and fast identity management platform"
 url="https://kanidm.com/"
 # only x86_64_v2 and aarch64 are supported
