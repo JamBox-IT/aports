@@ -1,0 +1,254 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+    # Only trigger on actual package changes
+    paths:
+      - 'JamBox/*/APKBUILD'
+      - 'testing/*/APKBUILD'
+      - 'JamBox/**/*.patch'
+      - 'testing/**/*.patch'
+      - '.github/workflows/build-and-release.yml'
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  ABUILD_ARCH: x86_64
+  ABUILD_JOBS: $(nproc)
+
+jobs:
+  detect-changes:
+    name: Detect Changed Packages
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.detect.outputs.packages }}
+      has-changes: ${{ steps.detect.outputs.has-changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed packages
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          else
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          fi
+
+          # Handle first commit case
+          if [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ] || [ -z "$BASE_SHA" ]; then
+            CHANGED_FILES=$(find . -name APKBUILD -path './JamBox/*' -o -name APKBUILD -path './testing/*')
+          else
+            CHANGED_FILES=$(git diff --name-only $BASE_SHA..$HEAD_SHA | grep -E 'APKBUILD$|\.patch$' || true)
+          fi
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+            echo "packages=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Extract package directories
+          PACKAGES=$(echo "$CHANGED_FILES" | sed 's|/APKBUILD||g; s|/.*\.patch||g' | sort -u | jq -R -s -c 'split("\n")[:-1]')
+          echo "packages=$PACKAGES" >> $GITHUB_OUTPUT
+          echo "has-changes=true" >> $GITHUB_OUTPUT
+          echo "Changed packages: $PACKAGES"
+
+  build:
+    name: Build Packages
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has-changes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64, armv7, armhf]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Alpine
+        uses: jirutka/setup-alpine@v1
+        with:
+          arch: ${{ matrix.arch }}
+          branch: latest-stable
+          extra-repositories: https://dl-cdn.alpinelinux.org/alpine/latest-stable/community
+          packages: alpine-sdk abuild apk-tools
+
+      - name: Configure abuild
+        shell: alpine.sh {0}
+        run: |
+          # Create abuild user
+          addgroup $(whoami) abuild
+
+          # Create build directories
+          mkdir -p /var/cache/distfiles
+          mkdir -p ~/.abuild
+
+          # Set architecture
+          echo "CARCH=${{ matrix.arch }}" >> ~/.abuild/abuild.conf
+          echo "JOBS=$(nproc)" >> ~/.abuild/abuild.conf
+
+          # Install RSA keys
+          echo "${{ secrets.RSA_PRIVATE_KEY }}" > ~/.abuild/jambox.rsa
+          chmod 600 ~/.abuild/jambox.rsa
+
+          echo "${{ secrets.RSA_PUBLIC_KEY }}" > ~/.abuild/jambox.rsa.pub
+          chmod 644 ~/.abuild/jambox.rsa.pub
+
+          # Configure signing
+          echo "PRIVATE_KEY_PATH=~/.abuild/jambox.rsa" >> ~/.abuild/abuild.conf
+          echo "PACKAGER_PRIVKEY=~/.abuild/jambox.rsa" >> ~/.abuild/abuild.conf
+
+          # Verify keys are readable
+          test -f ~/.abuild/jambox.rsa || (echo "ERROR: Private key not found"; exit 1)
+          test -f ~/.abuild/jambox.rsa.pub || (echo "ERROR: Public key not found"; exit 1)
+
+      - name: Build packages for ${{ matrix.arch }}
+        shell: alpine.sh {0}
+        working-directory: /home/runner/work/aports
+        run: |
+          PACKAGES='${{ needs.detect-changes.outputs.packages }}'
+          BUILD_FAILED=0
+
+          echo "Building packages for arch: ${{ matrix.arch }}"
+          echo "Packages to build: $PACKAGES"
+
+          # Parse JSON array
+          for pkg_dir in $(echo "$PACKAGES" | jq -r '.[]'); do
+            if [ -z "$pkg_dir" ]; then
+              continue
+            fi
+
+            if [ ! -f "$pkg_dir/APKBUILD" ]; then
+              echo "SKIP: $pkg_dir - no APKBUILD found"
+              continue
+            fi
+
+            echo "========================================="
+            echo "Building: $pkg_dir"
+            echo "========================================="
+
+            cd "$pkg_dir" || exit 1
+
+            # Get package info
+            . ./APKBUILD
+
+            echo "Package: $pkgname (v$pkgver-r$pkgrel)"
+            echo "Architecture: ${{ matrix.arch }}"
+            echo "Architectures: $arch"
+
+            # Check if this package should be built for this architecture
+            if echo "$arch" | grep -qE "(all|${{ matrix.arch }})"; then
+              if abuild -r 2>&1; then
+                echo "SUCCESS: Built $pkgname"
+              else
+                echo "FAILED: Could not build $pkgname"
+                BUILD_FAILED=1
+              fi
+            else
+              echo "SKIP: Package not configured for ${{ matrix.arch }}"
+            fi
+
+            cd /home/runner/work/aports || exit 1
+          done
+
+          if [ $BUILD_FAILED -ne 0 ]; then
+            echo "ERROR: Build failed for one or more packages"
+            exit 1
+          fi
+
+      - name: Sign packages
+        shell: alpine.sh {0}
+        continue-on-error: true
+        run: |
+          cd /home/runner/work/aports
+          # Find and sign any unsigned packages
+          find ~/packages -name "*.apk" -type f 2>/dev/null | while read -r pkg; do
+            echo "Signing: $pkg"
+            abuild-sign -k ~/.abuild/jambox.rsa "$pkg" 2>/dev/null || true
+          done
+
+      - name: Collect built packages
+        shell: alpine.sh {0}
+        if: success()
+        run: |
+          mkdir -p /tmp/packages/${{ matrix.arch }}
+          find ~/packages -name "*.apk" -type f -exec cp {} /tmp/packages/${{ matrix.arch }}/ \; 2>/dev/null || true
+          find ~/packages -name "*.apk.asc" -type f -exec cp {} /tmp/packages/${{ matrix.arch }}/ \; 2>/dev/null || true
+          ls -la /tmp/packages/${{ matrix.arch }}/ || echo "No packages built"
+
+      - name: Upload build artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.arch }}
+          path: /tmp/packages/${{ matrix.arch }}/
+          retention-days: 30
+
+  create-release:
+    name: Create Release
+    needs: [detect-changes, build]
+    if: needs.detect-changes.outputs.has-changes == 'true' && !failure()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-packages
+
+      - name: Organize packages by architecture
+        run: |
+          mkdir -p packages
+          for arch_dir in all-packages/packages-*/; do
+            arch=$(basename "$arch_dir" | sed 's/packages-//')
+            mkdir -p "packages/$arch"
+            cp "$arch_dir"*.apk* "packages/$arch/" 2>/dev/null || true
+          done
+          ls -la packages/
+
+      - name: Generate SBOM
+        run: |
+          cat > PACKAGES.txt << EOF
+          # JamBox Alpine Linux Packages
+          # Built: $(date)
+          # Architectures: $(ls -1 packages | tr '\n' ', ' | sed 's/,$//')
+
+          EOF
+
+          for arch in packages/*/; do
+            arch_name=$(basename "$arch")
+            echo "## $arch_name" >> PACKAGES.txt
+            ls -1 "$arch"/*.apk 2>/dev/null | xargs -I {} basename {} >> PACKAGES.txt || true
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: packages/**/*.apk*
+          body_path: PACKAGES.txt
+          draft: false
+          prerelease: false
+          tag_name: release-${{ github.run_number }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload packages as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-release-packages
+          path: packages/
+          retention-days: 90

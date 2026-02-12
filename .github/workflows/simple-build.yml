@@ -1,0 +1,139 @@
+name: Simple Alpine Build
+
+# Lightweight alternative if the main build workflow is too complex
+# Use this if you only need to build for x86_64 initially
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'JamBox/*/APKBUILD'
+      - 'testing/*/APKBUILD'
+      - '.github/workflows/simple-build.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Packages
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Alpine
+        uses: jirutka/setup-alpine@v1
+        with:
+          arch: x86_64
+          branch: latest-stable
+          packages: alpine-sdk abuild apk-tools
+
+      - name: Configure Build Environment
+        shell: alpine.sh {0}
+        run: |
+          # Create build directories
+          mkdir -p ~/.abuild /var/cache/distfiles /tmp/packages
+
+          # Setup RSA keys
+          cat > ~/.abuild/jambox.rsa << 'EOF'
+          ${{ secrets.RSA_PRIVATE_KEY }}
+          EOF
+          chmod 600 ~/.abuild/jambox.rsa
+
+          cat > ~/.abuild/jambox.rsa.pub << 'EOF'
+          ${{ secrets.RSA_PUBLIC_KEY }}
+          EOF
+          chmod 644 ~/.abuild/jambox.rsa.pub
+
+          # Configure abuild
+          cat > ~/.abuild/abuild.conf << 'EOF'
+          PACKAGER_PRIVKEY=~/.abuild/jambox.rsa
+          PACKAGER="JamBox CI <ci@jambox.local>"
+          JOBS=$(nproc)
+          EOF
+
+      - name: Build Changed Packages
+        shell: alpine.sh {0}
+        continue-on-error: true
+        run: |
+          # Get changed files
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git ls-files)
+          PACKAGES=$(echo "$CHANGED" | grep -E 'APKBUILD|\.patch' | cut -d/ -f1-2 | sort -u)
+
+          if [ -z "$PACKAGES" ]; then
+            echo "No packages changed, building all..."
+            PACKAGES=$(find . -name APKBUILD -path './JamBox/*' -o -name APKBUILD -path './testing/*' | cut -d/ -f1-2 | sort -u)
+          fi
+
+          BUILD_COUNT=0
+          FAIL_COUNT=0
+
+          echo "Packages to build: $PACKAGES"
+
+          for pkg_dir in $PACKAGES; do
+            if [ ! -f "$pkg_dir/APKBUILD" ]; then
+              continue
+            fi
+
+            echo "========================================="
+            echo "Building: $pkg_dir"
+            echo "========================================="
+
+            cd "$pkg_dir"
+
+            # Source APKBUILD to get package info
+            . ./APKBUILD
+
+            # Check if compatible with x86_64
+            if echo "$arch" | grep -qE "(all|x86_64)"; then
+              if abuild -r 2>&1 | tee build.log; then
+                echo "SUCCESS: $pkgname"
+                BUILD_COUNT=$((BUILD_COUNT + 1))
+              else
+                echo "FAILED: $pkgname"
+                cat build.log
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+              fi
+            else
+              echo "SKIP: Not compatible with x86_64"
+            fi
+
+            cd - > /dev/null
+          done
+
+          echo ""
+          echo "Build Summary: $BUILD_COUNT succeeded, $FAIL_COUNT failed"
+
+          if [ $FAIL_COUNT -gt 0 ]; then
+            exit 1
+          fi
+
+      - name: Collect Packages
+        shell: alpine.sh {0}
+        if: success()
+        run: |
+          find ~/packages -name "*.apk" -type f -exec cp {} /tmp/packages/ \;
+          find ~/packages -name "*.apk.asc" -type f -exec cp {} /tmp/packages/ \; 2>/dev/null || true
+          ls -lh /tmp/packages/
+
+      - name: Upload Artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: /tmp/packages/
+          retention-days: 30
+
+      - name: Create Release
+        if: success()
+        uses: softprops/action-gh-release@v1
+        with:
+          files: /tmp/packages/*.apk*
+          tag_name: build-${{ github.run_number }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
