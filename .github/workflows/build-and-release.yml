@@ -285,20 +285,30 @@ jobs:
           # Install apk-tools for creating APKINDEX
           sudo apt-get update && sudo apt-get install -y alpine-sdk
 
-          # Create repository directory structure
-          mkdir -p alpine-repo/JamBox
+          # Determine Alpine version based on branch
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          if [ "$BRANCH" = "main" ]; then
+            ALPINE_VERSION="edge"
+          else
+            ALPINE_VERSION="$BRANCH"  # e.g., 3.19-stable, 3.18-stable
+          fi
+
+          echo "Building for Alpine version: $ALPINE_VERSION"
+
+          # Create repository directory structure: /edge/JamBox/ or /v3.19/JamBox/
+          mkdir -p alpine-repo/${ALPINE_VERSION}/JamBox
 
           # Organize packages by architecture with APKINDEX
           for arch in x86_64 aarch64 armv7 armhf; do
             if [ -d "packages" ] && ls packages/*-${arch}.apk 2>/dev/null; then
-              mkdir -p alpine-repo/JamBox/${arch}
-              cp packages/*-${arch}.apk alpine-repo/JamBox/${arch}/ || true
+              mkdir -p alpine-repo/${ALPINE_VERSION}/JamBox/${arch}
+              cp packages/*-${arch}.apk alpine-repo/${ALPINE_VERSION}/JamBox/${arch}/ || true
 
               # Create APKINDEX
-              cd alpine-repo/JamBox/${arch}
+              cd alpine-repo/${ALPINE_VERSION}/JamBox/${arch}
               apk index -o APKINDEX.tar.gz *.apk
               abuild-sign -k ~/.abuild/*.rsa APKINDEX.tar.gz || echo "Signing skipped"
-              cd ../../..
+              cd ../../../..
             fi
           done
 
@@ -311,4 +321,4 @@ jobs:
           publish_dir: ./alpine-repo
           publish_branch: gh-pages
           keep_files: true
-          destination_dir: packages
+          destination_dir: .
