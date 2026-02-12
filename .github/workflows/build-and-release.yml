@@ -82,7 +82,7 @@ jobs:
           arch: ${{ matrix.arch }}
           branch: latest-stable
           extra-repositories: https://dl-cdn.alpinelinux.org/alpine/latest-stable/community
-          packages: alpine-sdk abuild apk-tools
+          packages: alpine-sdk abuild apk-tools jq
 
       - name: Setup abuild user and permissions
         shell: alpine.sh --root {0}
