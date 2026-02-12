@@ -1,0 +1,1320 @@
+diff --git a/docs/configfile.md b/docs/configfile.md
+index 16977b0..8798c07 100644
+--- a/docs/configfile.md
++++ b/docs/configfile.md
+@@ -11,6 +11,7 @@
+ pause=5
+ 
+ # ipaddress or hostname of the mqtt broker, default is 'localhost'
++# See mqtt documentation for all the options available
+ mqtt_broker=localhost
+ 
+ # mqtt broker port number, default is 1883
+diff --git a/docs/mqtt_configuration.md b/docs/mqtt_configuration.md
+new file mode 100644
+index 0000000..fd102cb
+--- /dev/null
++++ b/docs/mqtt_configuration.md
+@@ -0,0 +1,84 @@
++# MQTT Manager System
++
++## Overview
++
++The new MQTT system provides a threaded, centralized manager for all MQTT connections with support for bidirectional communication. Key features:
++
++- **Single connection per broker**: Multiple devices can share the same MQTT broker connection
++- **Bidirectional communication**: Devices can receive and respond(acknowledge) to commands via MQTT (json reponse).
++- **Thread-safe**: All operations are handled in separate threads with proper synchronization
++- **Automatic reconnection**: Built-in reconnection logic with exponential backoff
++- **Legacy compatibility**: Existing code continues to work without changes (WORK In PROGRESS)
++- **Proper qos levels**: Broker retention possible for commands if the sender set it, default for cmd_response. All outputs are still qos 0
++- **Broker retention ready**: automatically sends cmd_response with retention and qos 1, login with hostname plus a hash ID (using host, user, port)
++  to allow sending commands with qos 1/2 plus retention. Creates a readable client ID format: mppsolar_{hostname}_{hash}
++- **MQTT default wildcards**: are allowed.
++- **Allowed command list**: per device (regex supported).
++- Lagacy MQTT configuration in SETUP plus per device override (multiple broker support).
++
++
++## Configuration
++
++### MQTT Basic Setup Section
++You may  still setup mqtt options here, though any of the values per device will take precedence.
++```
++[SETUP]
++pause=10
++mqtt_broker=192.168.10.134
++mqtt_port=1883
++mqtt_user=mqttuser
++mqtt_pass=mqttpass
++```
++
++### Device Section with MQTT Commands
++```
++[Inverter_1]
++port=/dev/hidraw0
++protocol=PI30m045
++command=QPGS0#QPIGS
++outputs=hassd_mqtt2
++mqtt_allowed_cmds=POP0[0-2],PCP*,MCHGC{0-1}[0-6][0-2]
++# Optional: override broker settings for this device
++mqtt_broker=192.168.1.100
++mqtt_port=1884
++```
++
++## Command Structure
++
++### Command Topic Pattern where hostname is mpp-solars host (FQDN) short name.
++Commands are received on: `{hostname}/{device_name}/cmd`
++
++Example: `myserver/Inverter_1/cmd`
++
++### Response Topic Pattern
++Responses are sent on: `{hostname}/{device_name}/cmd_response`
++
++Example: `myserver/Inverter_1/cmd_response`
++
++### Command Format
++Send plain text commands to the command topic:
++```
++POP02
++```
++### MQTT wildcards are allowed for devices:
++MQTT supports two types of wildcards: + (single-level) and # (multi-level).
++
++### Response Format
++Responses are JSON formatted:
++```json
++{
++  "result": {
++    "_command": "POP02",
++     "_command_description": "Set Device Output Source Priority",
++      "raw_response": [
++        "(ACK9 \r",
++         ""
++      ],
++       "POP": [
++         "ACK",
++          ""
++        ]
++  },
++  "command": "POP02",
++  "timestamp": 1750305720.956817
++}
+\ No newline at end of file
+diff --git a/mppsolar/__init__.py b/mppsolar/__init__.py
+index 85e02aa..cdf9a2e 100755
+--- a/mppsolar/__init__.py
++++ b/mppsolar/__init__.py
+@@ -22,7 +22,8 @@ from mppsolar.daemon.daemon import (
+     setup_daemon_logging,
+     daemonize,
+ )
+-from mppsolar.libs.mqttbrokerc import MqttBroker
++from mppsolar.libs.mqttbroker_legacy import MqttBroker
++from mppsolar.libs.mqtt_manager import mqtt_manager
+ from mppsolar.outputs import get_outputs, list_outputs
+ from mppsolar.protocols import list_protocols
+ 
+@@ -249,6 +250,21 @@ def main():
+         print(description)
+         return None
+ 
++    def execute_device_command(device_name: str, command: str):
++        """Execute a command on a specific device and return results"""
++        log.info(f"Executing command '{command}' on device '{device_name}'")
++
++        # Find the device in our commands list
++        for _device, _command, _tag, _outputs, filter, excl_filter, dev in _commands:
++            if _device._name == device_name:
++                try:
++                    result = _device.run_command(command=command)
++                    return {"result": result, "command": command, "timestamp": time.time()}
++                except Exception as e:
++                    raise Exception(f"Command execution failed: {str(e)}")
++
++        raise Exception(f"Device '{device_name}' not found")
++
+     # List available protocols if asked
+     if args.protocol == "help":
+         op = get_outputs("screen")[0]
+@@ -459,6 +475,7 @@ def main():
+         log_file_path = config["SETUP"].get("log_file", fallback="/var/log/mpp-solar.log")
+         sections.remove("SETUP")
+ 
++        # Track device configurations for MQTT command setup
+         # Process 'command' sections
+         for section in sections:
+             name = section
+@@ -480,6 +497,7 @@ def main():
+             prom_output_dir = config[section].get("prom_output_dir", fallback=prom_output_dir)
+             mqtt_topic = config[section].get("mqtt_topic", fallback=mqtt_topic)
+             section_dev = config[section].get("dev", fallback=None)
++            mqtt_allowed_cmds = config[section].get("mqtt_allowed_cmds", fallback="")
+             #
+             device_class = get_device_class(_type)
+             log.debug(f"device_class {device_class}")
+@@ -502,6 +520,14 @@ def main():
+             # build array of commands
+             commands = _command.split("#")
+ 
++            # Setup MQTT commands if configured
++            if mqtt_allowed_cmds and mqtt_broker.enabled:
++                allowed_cmd_list = [cmd.strip() for cmd in mqtt_allowed_cmds.split(",") if cmd.strip()]
++                log.info(f"Setting up MQTT commands for device '{name}': {allowed_cmd_list}")
++                mqtt_broker.setup_device_commands(
++                    device_name=name, allowed_commands=allowed_cmd_list, command_callback=execute_device_command
++                )
++
+             for command in commands:
+                 _commands.append((device, command, tag, outputs, filter, excl_filter, section_dev))
+             log.debug(f"Commands from config file {_commands}")
+@@ -582,6 +608,9 @@ def main():
+     # Notify systemd/init
+     daemon.initialize()
+     log_process_info("AFTER_DAEMON_INITIALIZE", log.info)
++
++    # Start MQTT manager
++    mqtt_manager.start_all()
+     daemon.notify("Service Initializing ...")
+     log_process_info("AFTER_DAEMON_NOTIFY", log.info)
+ 
+@@ -638,6 +667,7 @@ def main():
+         except Exception as e:
+             log.error(f"[LOOP ERROR] Exception in daemon loop: {e}", exc_info=True)
+             time.sleep(5)  # Prevent tight loop in case of recurring errors
++    mqtt_manager.stop_all()
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/mppsolar/daemon/daemon.py b/mppsolar/daemon/daemon.py
+index e45cf20..ceb4afc 100644
+--- a/mppsolar/daemon/daemon.py
++++ b/mppsolar/daemon/daemon.py
+@@ -39,6 +39,7 @@ def daemonize():
+     Properly daemonize the process (Unix double-fork)
+     Enhanced for PyInstaller compatibility
+     """
++    import sys
+     import logging
+     from mppsolar.daemon.pyinstaller_runtime import is_pyinstaller_bundle, has_been_spawned
+ 
+diff --git a/mppsolar/libs/mqtt_manager.py b/mppsolar/libs/mqtt_manager.py
+new file mode 100644
+index 0000000..854aadd
+--- /dev/null
++++ b/mppsolar/libs/mqtt_manager.py
+@@ -0,0 +1,405 @@
++import logging
++import threading
++import hashlib
++import time
++import re
++import socket
++from typing import Dict, List, Optional, Callable, Any
++from dataclasses import dataclass, field
++from queue import Queue, Empty
++import json
++
++import paho.mqtt.client as mqtt_client
++
++log = logging.getLogger("mqtt_manager")
++
++
++@dataclass
++class BrokerConfig:
++    """Configuration for a single MQTT broker"""
++    name: str
++    port: int = 1883
++    username: Optional[str] = None
++    password: Optional[str] = None
++    keepalive: int = 60
++    clean_session: bool = False
++
++    def __hash__(self):
++        return hash((self.name, self.port, self.username))
++
++
++@dataclass
++class DeviceConfig:
++    """Configuration for a device section"""
++    device_name: str
++    section_name: str
++    broker_config: BrokerConfig
++    results_topic: Optional[str] = None
++    allowed_commands: List[str] = field(default_factory=list)
++    command_callback: Optional[Callable] = None
++
++    def __post_init__(self):
++        # Compile regex patterns for allowed commands
++        self.allowed_cmd_patterns = []
++        for cmd in self.allowed_commands:
++            try:
++                self.allowed_cmd_patterns.append(re.compile(cmd))
++            except re.error as e:
++                log.warning(f"Invalid regex pattern '{cmd}': {e}")
++
++
++class MqttConnection:
++    """Manages a single MQTT broker connection with threading support"""
++
++    def __init__(self, broker_config: BrokerConfig):
++        self.config = broker_config
++#         self.client = mqtt_client.Client(clean_session=broker_config.clean_session)
++        client_id = self._generate_client_id()
++        self.client = mqtt_client.Client(
++            client_id=client_id,
++            clean_session=broker_config.clean_session
++        )
++        self.connected = False
++        self.reconnect_delay = 5
++        self.max_reconnect_delay = 300
++        self.current_reconnect_delay = self.reconnect_delay
++        self.should_stop = threading.Event()
++        self.connection_thread = None
++        self.publish_queue = Queue()
++        self.publish_thread = None
++        self.devices = {}  # device_name -> DeviceConfig
++
++        # Setup client callbacks
++        self.client.on_connect = self._on_connect
++        self.client.on_disconnect = self._on_disconnect
++        self.client.on_message = self._on_message
++        self.client.on_publish = self._on_publish
++
++        # Setup authentication if provided
++        if broker_config.username:
++            self.client.username_pw_set(broker_config.username, broker_config.password)
++
++    def _generate_client_id(self) -> str:
++        """Generate a consistent client ID based on broker config and hostname"""
++        hostname = self._get_hostname()
++
++        # Create a string that uniquely identifies this connection
++        connection_string = f"{hostname}:{self.config.name}:{self.config.port}"
++        if self.config.username:
++            connection_string += f":{self.config.username}"
++
++        # Generate a hash for consistency
++        hash_obj = hashlib.md5(connection_string.encode('utf-8'))
++        hash_hex = hash_obj.hexdigest()[:8]  # Use first 8 chars for brevity
++
++        # Create client ID with hostname prefix for readability
++        client_id = f"mppsolar_{hostname}_{hash_hex}"
++
++        log.debug(f"Generated client ID: {client_id} for connection: {connection_string}")
++        return client_id
++
++
++    def _get_hostname(self) -> str:
++        """Get short hostname for topic structure"""
++        try:
++            return socket.gethostname().split('.')[0]
++        except:
++            return "mppsolar"
++
++    def add_device(self, device_config: DeviceConfig):
++        """Add a device configuration to this connection"""
++        self.devices[device_config.device_name] = device_config
++        if self.connected and device_config.allowed_commands:
++            self._subscribe_to_commands(device_config)
++
++    def _subscribe_to_commands(self, device_config: DeviceConfig):
++        """Subscribe to command topics for a device"""
++        if not device_config.allowed_commands:
++            return
++
++        hostname = self._get_hostname()
++        cmd_topic = f"{hostname}/{device_config.device_name}/cmd"
++        log.info(f"Subscribing to command topic: {cmd_topic}")
++        self.client.subscribe(cmd_topic, qos=1)
++
++    def _on_connect(self, client, userdata, flags, rc):
++        """Callback for when client connects to broker"""
++        connection_results = {
++            0: "Connection successful",
++            1: "Connection refused - incorrect protocol version",
++            2: "Connection refused - invalid client identifier",
++            3: "Connection refused - server unavailable",
++            4: "Connection refused - bad username or password",
++            5: "Connection refused - not authorised"
++        }
++
++        result_msg = connection_results.get(rc, f"Unknown result code: {rc}")
++        log.info(f"MQTT connection to {self.config.name}:{self.config.port} - {result_msg}")
++
++        if rc == 0:
++            self.connected = True
++            self.current_reconnect_delay = self.reconnect_delay
++
++            # Subscribe to command topics for all devices
++            for device_config in self.devices.values():
++                self._subscribe_to_commands(device_config)
++        else:
++            self.connected = False
++
++    def _on_disconnect(self, client, userdata, rc):
++        """Callback for when client disconnects from broker"""
++        self.connected = False
++        if rc != 0:
++            log.warning(f"Unexpected MQTT disconnection from {self.config.name}. RC: {rc}")
++
++    def _on_message(self, client, userdata, msg):
++        """Handle incoming MQTT messages"""
++        try:
++            topic_parts = msg.topic.split('/')
++            if len(topic_parts) >= 3 and topic_parts[-1] == 'cmd':
++                hostname = topic_parts[0]
++                device_name = topic_parts[1]
++
++                # Find matching device
++                device_config = self.devices.get(device_name)
++                if not device_config:
++                    log.warning(f"Received command for unknown device: {device_name}")
++                    return
++
++                command = msg.payload.decode('utf-8').strip()
++                log.info(f"Received command '{command}' for device '{device_name}'")
++
++                # Check if command is allowed
++                if not self._is_command_allowed(command, device_config):
++                    log.warning(f"Command '{command}' not allowed for device '{device_name}'")
++                    error_response = {
++                        "error": "Command not allowed",
++                        "command": command,
++                        "timestamp": time.time()
++                    }
++                    self._send_command_response(hostname, device_name, error_response)
++                    return
++
++                # Execute command if callback is available
++                if device_config.command_callback:
++                    try:
++                        result = device_config.command_callback(device_name, command)
++                        self._send_command_response(hostname, device_name, result)
++                    except Exception as e:
++                        log.error(f"Error executing command '{command}': {e}")
++                        error_response = {
++                            "error": str(e),
++                            "command": command,
++                            "timestamp": time.time()
++                        }
++                        self._send_command_response(hostname, device_name, error_response)
++        except Exception as e:
++            log.error(f"Error processing message: {e}")
++
++    def _is_command_allowed(self, command: str, device_config: DeviceConfig) -> bool:
++        """Check if command matches any allowed patterns"""
++        if not device_config.allowed_cmd_patterns:
++            return False
++
++        for pattern in device_config.allowed_cmd_patterns:
++            if pattern.match(command):
++                return True
++        return False
++
++    def _send_command_response(self, hostname: str, device_name: str, response: Any):
++        """Send command response to the response topic"""
++        response_topic = f"{hostname}/{device_name}/cmd_response"
++
++        if isinstance(response, dict):
++            payload = json.dumps(response)
++        else:
++            payload = str(response)
++        log.debug(f"Sending command response with QoS=1, retain=True to topic: {response_topic}")
++        self.publish(response_topic, payload, qos=1, retain=True)
++
++    def _on_publish(self, client, userdata, mid):
++        """Callback for when message is published"""
++        log.debug(f"Message {mid} published successfully")
++
++    def start(self):
++        """Start the connection and background threads"""
++        if self.connection_thread and self.connection_thread.is_alive():
++            return
++
++        self.should_stop.clear()
++        self.connection_thread = threading.Thread(target=self._connection_loop, daemon=True)
++        self.connection_thread.start()
++        self.publish_thread = threading.Thread(target=self._publish_loop, daemon=True)
++        self.publish_thread.start()
++        log.info(f"Started MQTT connection manager for {self.config.name}:{self.config.port}")
++
++    def stop(self):
++        """Stop the connection and all background threads"""
++        log.info(f"Stopping MQTT connection to {self.config.name}:{self.config.port}")
++        self.should_stop.set()
++
++        if self.connected:
++            self.client.disconnect()
++
++        if self.connection_thread and self.connection_thread.is_alive():
++            self.connection_thread.join(timeout=5)
++
++        if self.publish_thread and self.publish_thread.is_alive():
++            self.publish_thread.join(timeout=5)
++
++    def _connection_loop(self):
++        """Main connection management loop"""
++        while not self.should_stop.is_set():
++            if not self.connected:
++                try:
++                    log.info(f"Attempting to connect to {self.config.name}:{self.config.port}")
++                    self.client.connect(self.config.name, self.config.port, self.config.keepalive)
++                    self.client.loop_start()
++
++                    # Wait for connection or timeout
++                    start_time = time.time()
++                    while not self.connected and (time.time() - start_time) < 10:
++                        if self.should_stop.is_set():
++                            return
++                        time.sleep(0.1)
++
++                    if not self.connected:
++                        log.warning(f"Connection timeout to {self.config.name}:{self.config.port}")
++                        self._handle_connection_failure()
++
++                except Exception as e:
++                    log.error(f"Connection error to {self.config.name}:{self.config.port}: {e}")
++                    self._handle_connection_failure()
++            else:
++                # Keep connection alive
++                time.sleep(1)
++
++    def _handle_connection_failure(self):
++        """Handle connection failure with exponential backoff"""
++        log.warning(f"Waiting {self.current_reconnect_delay}s before reconnecting to {self.config.name}")
++        time.sleep(self.current_reconnect_delay)
++
++        self.current_reconnect_delay = min(self.current_reconnect_delay * 2, self.max_reconnect_delay)
++
++    def _publish_loop(self):
++        """Background thread for publishing queued messages"""
++        while not self.should_stop.is_set():
++            try:
++                # Get message from queue with timeout
++                msg_data = self.publish_queue.get(timeout=1)
++
++                if self.connected:
++                    topic = msg_data['topic']
++                    payload = msg_data['payload']
++                    # FIXED: Use direct dictionary access instead of .get() with defaults
++                    # This preserves the QoS and retain values that were explicitly set
++                    qos = msg_data['qos']
++                    retain = msg_data['retain']
++
++                    log.debug(f"Publishing to {topic} with QoS={qos}, retain={retain}")
++                    result = self.client.publish(topic, payload, qos=qos, retain=retain)
++                    if result.rc != mqtt_client.MQTT_ERR_SUCCESS:
++                        log.warning(f"Failed to publish to {topic}: {result.rc}")
++                    else:
++                        if isinstance(payload, (bytes, str)):
++                            preview = payload[:100]
++                        else:
++                            preview = str(payload)[:100]
++                        log.debug(f"Published to {topic}: {preview}… (QoS={qos}, retain={retain})")
++                else:
++                    log.warning(f"Cannot publish to {msg_data['topic']} - not connected")
++
++            except Empty:
++                continue
++            except KeyError as e:
++                log.error(f"Missing required key in message data: {e}")
++            except Exception as e:
++                log.error(f"Error in publish loop: {e}")
++
++    def publish(self, topic: str, payload: str, qos: int = 0, retain: bool = False):
++        """Queue a message for publishing"""
++        msg_data = {
++            'topic': topic,
++            'payload': payload,
++            'qos': qos,
++            'retain': retain
++        }
++        log.debug(f"Queuing message for {topic} with QoS={qos}, retain={retain}")
++        self.publish_queue.put(msg_data)
++
++    def publish_multiple(self, messages: List[Dict[str, Any]]):
++        """Queue multiple messages for publishing"""
++        for msg in messages:
++            topic = msg['topic']
++            payload = msg['payload']
++            qos = msg.get('qos', 0)
++            retain = msg.get('retain', False)
++            self.publish(topic, payload, qos, retain)
++
++
++class MqttManager:
++    """Central manager for all MQTT connections and devices"""
++
++    def __init__(self):
++        self.connections: Dict[str, MqttConnection] = {}
++        self.device_to_connection: Dict[str, MqttConnection] = {}
++        self.running = False
++
++    def _get_broker_key(self, broker_config: BrokerConfig) -> str:
++        """Generate unique key for broker configuration"""
++        return f"{broker_config.name}:{broker_config.port}:{broker_config.username or 'anonymous'}"
++
++    def add_device(self, device_config: DeviceConfig) -> MqttConnection:
++        """Add a device and return the associated connection"""
++        broker_key = self._get_broker_key(device_config.broker_config)
++
++        # Create connection if it doesn't exist
++        if broker_key not in self.connections:
++            connection = MqttConnection(device_config.broker_config)
++            self.connections[broker_key] = connection
++            if self.running:
++                connection.start()
++
++        connection = self.connections[broker_key]
++        connection.add_device(device_config)
++        self.device_to_connection[device_config.device_name] = connection
++
++        return connection
++
++    def get_connection_for_device(self, device_name: str) -> Optional[MqttConnection]:
++        """Get the MQTT connection for a specific device"""
++        return self.device_to_connection.get(device_name)
++
++    def start_all(self):
++        """Start all MQTT connections"""
++        self.running = True
++        for connection in self.connections.values():
++            connection.start()
++        log.info(f"Started {len(self.connections)} MQTT connections")
++
++    def stop_all(self):
++        """Stop all MQTT connections"""
++        self.running = False
++        for connection in self.connections.values():
++            connection.stop()
++        log.info("Stopped all MQTT connections")
++
++    def publish_to_device(self, device_name: str, topic: str, payload: str, qos: int = 0, retain: bool = False):
++        """Publish message using the connection for a specific device"""
++        connection = self.get_connection_for_device(device_name)
++        if connection:
++            connection.publish(topic, payload, qos, retain)
++        else:
++            log.warning(f"No MQTT connection found for device: {device_name}")
++
++    def publish_multiple_to_device(self, device_name: str, messages: List[Dict[str, Any]]):
++        """Publish multiple messages using the connection for a specific device"""
++        connection = self.get_connection_for_device(device_name)
++        if connection:
++            connection.publish_multiple(messages)
++        else:
++            log.warning(f"No MQTT connection found for device: {device_name}")
++
++
++# Global instance
++mqtt_manager = MqttManager()
+diff --git a/mppsolar/libs/mqttbroker.py b/mppsolar/libs/mqttbroker.py
+deleted file mode 100644
+index 79cba0b..0000000
+--- a/mppsolar/libs/mqttbroker.py
++++ /dev/null
+@@ -1,95 +0,0 @@
+-import logging
+-from dataclasses import dataclass
+-from typing import Optional
+-
+-import paho.mqtt.client as mqtt_client
+-
+-# Set-up logger
+-log = logging.getLogger("mqttbroker")
+-
+-
+-@dataclass
+-class MqttBroker:
+-    name: str
+-    port: int = 1883
+-    username: Optional[str] = None
+-    password: Optional[str] = None
+-    results_topic: Optional[str] = None
+-    mqttc: mqtt_client.Client = mqtt_client.Client()
+-    _isConnected: bool = False
+-
+-    def on_connect(self, client, userdata, flags, rc):
+-        # 0: Connection successful
+-        # 1: Connection refused - incorrect protocol version
+-        # 2: Connection refused - invalid client identifier
+-        # 3: Connection refused - server unavailable
+-        # 4: Connection refused - bad username or password
+-        # 5: Connection refused - not authorised
+-        # 6-255: Currently unused.
+-        connection_result = [
+-            "Connection successful",
+-            "Connection refused - incorrect protocol version",
+-            "Connection refused - invalid client identifier",
+-            "Connection refused - server unavailable",
+-            "Connection refused - bad username or password",
+-            "Connection refused - not authorised",
+-        ]
+-        log.debug(
+-            f"MqttBroker connection returned result: {rc} {connection_result[rc]}"
+-        )
+-        if rc == 0:
+-            self._isConnected = True
+-            return
+-        self._isConnected = False
+-
+-    def on_disconnect(self, client, userdata, rc):
+-        log.error(f"Disconnection returned result: {rc}")
+-        self._isConnected = False
+-
+-    def connect(self):
+-
+-        self.mqttc.on_connect = self.on_connect
+-        self.mqttc.on_disconnect = self.on_disconnect
+-        # if a name is supplied, connect
+-        if self.name:
+-            self.mqttc.connect(self.name, self.port, keepalive=60)
+-
+-    def start(self):
+-        if self._isConnected:
+-            self.mqttc.loop_start()
+-
+-    def stop(self):
+-        if self.name:
+-            self.mqttc.loop_stop()
+-            if self._isConnected:
+-                self.mqttc.disconnect
+-
+-    def set(self, variable, value):
+-        setattr(self, variable, value)
+-
+-    def update(self, variable, value):
+-        # only override if value is not None
+-        if value is None:
+-            return
+-        setattr(self, variable, value)
+-
+-    def subscribe(self, topic, callback):
+-        # subscribe to mqtt topic
+-        if not self.name:
+-            return
+-        # check if connected, connect if not
+-        if not self._isConnected:
+-            log.debug("Not connected, connecting")
+-            self.connect
+-        # Register callback
+-        self.mqttc.on_message = callback
+-        if self._isConnected:
+-            # Subscribe to command topic
+-            self.mqttc.subscribe(topic, qos=0)
+-
+-
+-if __name__ == "__main__":
+-    broker = MqttBroker("brokername")
+-    print(broker)
+-    broker.name = "test1"
+-    print(broker)
+diff --git a/mppsolar/libs/mqttbroker_legacy.py b/mppsolar/libs/mqttbroker_legacy.py
+new file mode 100644
+index 0000000..b35803f
+--- /dev/null
++++ b/mppsolar/libs/mqttbroker_legacy.py
+@@ -0,0 +1,145 @@
++import logging
++from typing import Optional, Dict, Any, List
++from .mqtt_manager import mqtt_manager, BrokerConfig, DeviceConfig
++
++log = logging.getLogger("mqttbroker_legacy")
++
++
++class MqttBroker:
++    """Legacy wrapper for the new threaded MQTT manager"""
++
++    def __str__(self):
++        if self.enabled:
++            return f"MqttBroker name: {self.name}, port: {self.port}, user: {self.username}"
++        else:
++            return "MqttBroker DISABLED"
++
++    def __init__(self, config=None):
++        self.config = config or {}
++        log.debug(f"mqttbroker config: {config}")
++
++        self.name = self.config.get("name")
++
++        try:
++            _port = self.config.get("port", 1883)
++            self.port = int(_port)
++        except ValueError:
++            log.info(f"Unable to process port: '{_port}', defaulting to 1883")
++            self.port = 1883
++
++        self.username = self.config.get("user")
++        self.password = self.config.get("pass")
++        self.results_topic = None
++
++        # Legacy compatibility
++        self._isConnected = False
++        self.enabled = self.name is not None
++
++        # Internal tracking
++        self._device_name = None
++        self._connection = None
++
++    def set(self, variable, value):
++        """Set attribute value"""
++        setattr(self, variable, value)
++
++    def update(self, variable, value):
++        """Update attribute only if value is not None"""
++        if value is None:
++            return
++        setattr(self, variable, value)
++
++    def connect(self):
++        """Legacy connect method - now handled automatically by manager"""
++        if not self.enabled:
++            log.info(f"MQTT broker not enabled, was a broker name defined? '{self.name}'")
++            return
++
++        log.debug(f"Legacy connect called for {self.name}:{self.port}")
++        # Connection is now managed automatically by the manager
++
++    def start(self):
++        """Legacy start method"""
++        pass  # Handled by manager
++
++    def stop(self):
++        """Legacy stop method"""
++        pass  # Handled by manager
++
++    def subscribe(self, topic, callback):
++        """Legacy subscribe method - not implemented in threaded version"""
++        log.warning("Legacy subscribe method called - use command callbacks instead")
++
++    def _ensure_connection(self, device_name: str = None, allowed_commands: List[str] = None,
++                          command_callback = None) -> bool:
++        """Ensure we have a connection set up for this broker/device combo"""
++        if not self.enabled:
++            return False
++
++        if device_name is None:
++            device_name = getattr(self, '_device_name', 'default')
++
++        # Check if we already have a connection for this device
++        connection = mqtt_manager.get_connection_for_device(device_name)
++        if connection:
++            self._connection = connection
++            return True
++
++        # Create broker and device config
++        broker_config = BrokerConfig(
++            name=self.name,
++            port=self.port,
++            username=self.username,
++            password=self.password
++        )
++
++        device_config = DeviceConfig(
++            device_name=device_name,
++            section_name=device_name,
++            broker_config=broker_config,
++            results_topic=self.results_topic,
++            allowed_commands=allowed_commands or [],
++            command_callback=command_callback
++        )
++
++        # Add to manager
++        self._connection = mqtt_manager.add_device(device_config)
++        self._device_name = device_name
++        return True
++
++    def publish(self, topic: str, payload: str, qos: int = 0, retain: bool = False,
++                device_name: str = None):
++        """Publish a single message"""
++        if self.name == "screen":
++            print(f"mqtt debug output only as broker name is 'screen' - topic: '{topic}', payload: '{payload}'")
++            return
++
++        if not self._ensure_connection(device_name):
++            log.warning("Cannot publish - no connection available")
++            return
++
++        self._connection.publish(topic, payload, qos, retain)
++
++    def publishMultiple(self, data: List[Dict[str, Any]], device_name: str = None):
++        """Publish multiple messages"""
++        if self.name == "screen":
++            for msg in data:
++                print(f"mqtt debug output only as broker name is 'screen' - topic: '{msg['topic']}', payload: '{msg['payload']}'")
++            return
++
++        if not self._ensure_connection(device_name):
++            log.warning("Cannot publish multiple - no connection available")
++            return
++
++        self._connection.publish_multiple(data)
++
++    def setup_device_commands(self, device_name: str, allowed_commands: List[str],
++                            command_callback = None):
++        """Set up command handling for a specific device"""
++        self._ensure_connection(device_name, allowed_commands, command_callback)
++
++
++# Legacy compatibility - maintain the old interface
++class MqttBrokerC(MqttBroker):
++    """Alias for backwards compatibility"""
++    pass
+diff --git a/mppsolar/libs/mqttbrokerc.py b/mppsolar/libs/mqttbrokerc.py
+deleted file mode 100644
+index 322c569..0000000
+--- a/mppsolar/libs/mqttbrokerc.py
++++ /dev/null
+@@ -1,186 +0,0 @@
+-import logging
+-from time import sleep
+-
+-import paho.mqtt.client as mqtt_client
+-
+-# Set-up logger
+-log = logging.getLogger("mqttbroker")
+-
+-
+-class MqttBroker:
+-    def __str__(self):
+-        if self.enabled:
+-            return f"MqttBroker name: {self.name}, port: {self.port}, user: {self.username}"
+-        else:
+-            return "MqttBroker DISABLED"
+-
+-    def __init__(self, config=None):
+-
+-        # mqttbroker:
+-        #     name: localhost
+-        #     port: 1883
+-        #     user: null
+-        #     pass: null
+-        #     adhoc_commands:
+-        #     topic: test/command_topic
+-        self.config = config
+-        if config is None:
+-            config = {}
+-        log.debug(f"mqttbroker config: {config}")
+-        self.name = config.get("name")
+-        try:
+-            _port = config.get("port", 1883)
+-            self.port = int(_port)
+-        except ValueError:
+-            log.info(f"Unable to process port: '{_port}', defaulting to 1883")
+-            self.port = 1883
+-
+-        self.username = config.get("user")
+-        self.password = config.get("pass")
+-        self._isConnected = False
+-        if self.name is None:
+-            self.enabled = False
+-        else:
+-            self.mqttc = mqtt_client.Client()
+-            self.enabled = True
+-            self._isConnected = False
+-
+-    def on_connect(self, client, userdata, flags, rc):
+-        # 0: Connection successful
+-        # 1: Connection refused - incorrect protocol version
+-        # 2: Connection refused - invalid client identifier
+-        # 3: Connection refused - server unavailable
+-        # 4: Connection refused - bad username or password
+-        # 5: Connection refused - not authorised
+-        # 6-255: Currently unused.
+-        connection_result = [
+-            "Connection successful",
+-            "Connection refused - incorrect protocol version",
+-            "Connection refused - invalid client identifier",
+-            "Connection refused - server unavailable",
+-            "Connection refused - bad username or password",
+-            "Connection refused - not authorised",
+-        ]
+-        log.debug(f"MqttBroker connection returned result: {rc} {connection_result[rc]}")
+-        if rc == 0:
+-            self._isConnected = True
+-            return
+-        self._isConnected = False
+-
+-    def on_disconnect(self, client, userdata, rc):
+-        print(f"Disconnection returned result: {rc}")
+-        self._isConnected = False
+-
+-    def connect(self):
+-        if not self.enabled:
+-            log.info(f"MQTT broker not enabled, was a broker name defined? '{self.name}'")
+-            return
+-        if not self.name:
+-            log.info(f"MQTT did not connect as no broker name '{self.name}'")
+-            return
+-        self.mqttc.on_connect = self.on_connect
+-        self.mqttc.on_disconnect = self.on_disconnect
+-        # if name is screen just return without connecting
+-        if self.name == "screen":
+-            # allows checking of message formats
+-            return
+-        try:
+-            log.debug(f"Connecting to {self.name} on port {self.port}")
+-            if self.username:
+-                # auth = {"username": mqtt_user, "password": mqtt_pass}
+-                _password = "********" if self.password is not None else "None"
+-                log.info(f"Using mqtt authentication, username: {self.username}, password: {_password}")
+-                self.mqttc.username_pw_set(self.username, password=self.password)
+-            else:
+-                log.debug("No mqtt authentication used")
+-                # auth = None
+-            self.mqttc.connect(self.name, port=self.port, keepalive=60)
+-            self.mqttc.loop_start()
+-            sleep(1)
+-        except ConnectionRefusedError as exc:
+-            log.warning(f"{self.name} refused connection '{exc}'")
+-
+-    def start(self):
+-        if self._isConnected:
+-            self.mqttc.loop_start()
+-
+-    def stop(self):
+-        log.debug("Stopping mqttbroker connection")
+-        if self.name:
+-            self.mqttc.loop_stop()
+-            if self._isConnected:
+-                log.debug("Disconnecting from mqtt broker")
+-                self.mqttc.disconnect
+-
+-    def set(self, variable, value):
+-        setattr(self, variable, value)
+-
+-    def update(self, variable, value):
+-        # only override if value is not None
+-        if value is None:
+-            return
+-        setattr(self, variable, value)
+-
+-    def subscribe(self, topic, callback):
+-        # subscribe to mqtt topic
+-        if not self.name:
+-            return
+-        # check if connected, connect if not
+-        if not self._isConnected:
+-            log.debug("Not connected, connecting")
+-            self.connect()
+-        # Register callback
+-        self.mqttc.on_message = callback
+-        if self._isConnected:
+-            # Subscribe to command topic
+-            log.debug(f"Subscribing to topic {topic}")
+-            self.mqttc.subscribe(topic, qos=0)
+-        else:
+-            log.warning(f"Did not subscribe to topic {topic} as not connected to broker")
+-
+-    def publishMultiple(self, data):
+-        for msg in data:
+-            self.publish(msg["topic"], msg["payload"])
+-
+-    def publish(self, topic, payload):
+-        log.debug(f"Publishing '{payload}' to '{topic}'")
+-        if self.name == "screen":
+-            print(f"mqtt debug output only as broker name is 'screen' - topic: '{topic}', payload: '{payload}'")
+-            return
+-        # check if connected, connect if not
+-        if not self._isConnected:
+-            log.debug("Not connected, connecting")
+-            self.connect()
+-            sleep(1)
+-            if not self._isConnected:
+-                log.warning("mqtt broker did not connect")
+-                return
+-        try:
+-            infot = self.mqttc.publish(topic, payload)
+-            infot.wait_for_publish()
+-        except Exception as e:
+-            log.warning(str(e))
+-
+-
+-
+-# print("Connecting to "+args.host+" port: "+str(port))
+-# mqttc.connect(args.host, port, args.keepalive)
+-
+-# mqttc.loop_start()
+-
+-# for x in range (0, args.nummsgs):
+-#     msg_txt = '{"msgnum": "'+str(x)+'"}'
+-#     print("Publishing: "+msg_txt)
+-#     infot = mqttc.publish(args.topic, msg_txt, qos=args.qos)
+-#     infot.wait_for_publish()
+-
+-#     time.sleep(args.delay)
+-
+-# mqttc.disconnect()
+-
+-
+-if __name__ == "__main__":
+-    broker = MqttBroker("brokername")
+-    print(broker)
+-    broker.name = "test1"
+-    print(broker)
+diff --git a/mppsolar/outputs/domoticz_autodiscover.py b/mppsolar/outputs/domoticz_autodiscover.py
+index decb73a..384e0be 100644
+--- a/mppsolar/outputs/domoticz_autodiscover.py
++++ b/mppsolar/outputs/domoticz_autodiscover.py
+@@ -71,3 +71,27 @@ class domoticz_autodiscover(mqtt):
+                 # msg = {"topic": state_topic, "payload": payload}
+                 # msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: domoticz_autodiscover")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"domoticz_autodiscover.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/domoticz_mqtt.py b/mppsolar/outputs/domoticz_mqtt.py
+index 414c3be..f2792e9 100644
+--- a/mppsolar/outputs/domoticz_mqtt.py
++++ b/mppsolar/outputs/domoticz_mqtt.py
+@@ -75,3 +75,27 @@ class domoticz_mqtt(mqtt):
+                 msg = {"topic": state_topic, "payload": payload}
+                 msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: domoticz_mqtt")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"domoticz_mqtt.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/hass_mqtt.py b/mppsolar/outputs/hass_mqtt.py
+index 198bfc9..c2dbac3 100644
+--- a/mppsolar/outputs/hass_mqtt.py
++++ b/mppsolar/outputs/hass_mqtt.py
+@@ -90,3 +90,27 @@ class hass_mqtt(mqtt):
+                     msg = {"topic": topic, "payload": value}
+                     msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: hass_mqtt")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"hass_mqtt.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/hassd_mqtt.py b/mppsolar/outputs/hassd_mqtt.py
+index 27c50e2..f21f81b 100644
+--- a/mppsolar/outputs/hassd_mqtt.py
++++ b/mppsolar/outputs/hassd_mqtt.py
+@@ -182,6 +182,9 @@ class hassd_mqtt(mqtt):
+         if data is None:
+             return
+ 
++        # Get device name for MQTT routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
+         # get the broker instance
+         mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
+         # exit if no broker
+@@ -194,6 +197,6 @@ class hassd_mqtt(mqtt):
+         log.debug(f"hassd_mqtt.output value_msgs {value_msgs}")
+ 
+         # publish
+-        mqtt_broker.publishMultiple(config_msgs)
++        mqtt_broker.publishMultiple(config_msgs, device_name=device_name)
+         sleep(0.5)
+-        mqtt_broker.publishMultiple(value_msgs)
++        mqtt_broker.publishMultiple(value_msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/influx2_mqtt.py b/mppsolar/outputs/influx2_mqtt.py
+index 97dcb15..c0506ad 100644
+--- a/mppsolar/outputs/influx2_mqtt.py
++++ b/mppsolar/outputs/influx2_mqtt.py
+@@ -59,3 +59,27 @@ class influx2_mqtt(mqtt):
+                     }
+                 msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: influx2_mqtt")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"influx2_mqtt.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/influx_mqtt.py b/mppsolar/outputs/influx_mqtt.py
+index 431f4db..2e2bc04 100644
+--- a/mppsolar/outputs/influx_mqtt.py
++++ b/mppsolar/outputs/influx_mqtt.py
+@@ -60,3 +60,27 @@ class influx_mqtt(mqtt):
+                     }
+                 msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: influx_mqtt")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"influx_mqtt.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/json_mqtt.py b/mppsolar/outputs/json_mqtt.py
+index 5394796..cdc0ad6 100644
+--- a/mppsolar/outputs/json_mqtt.py
++++ b/mppsolar/outputs/json_mqtt.py
+@@ -53,3 +53,27 @@ class json_mqtt(mqtt):
+         }
+         msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: json_mqtt")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"json_mqtt.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/mqtt.py b/mppsolar/outputs/mqtt.py
+index b156997..e26a9b1 100644
+--- a/mppsolar/outputs/mqtt.py
++++ b/mppsolar/outputs/mqtt.py
+@@ -101,9 +101,12 @@ class mqtt(baseoutput):
+         if mqtt_broker is None:
+             return
+ 
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
+         # build the messages...
+         msgs = self.build_msgs(**kwargs)
+         log.debug(f"mqtt.output msgs {msgs}")
+ 
+         # publish
+-        mqtt_broker.publishMultiple(msgs)
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/tag_mqtt.py b/mppsolar/outputs/tag_mqtt.py
+index 953e3dd..9e22568 100644
+--- a/mppsolar/outputs/tag_mqtt.py
++++ b/mppsolar/outputs/tag_mqtt.py
+@@ -55,3 +55,27 @@ class tag_mqtt(mqtt):
+                 }
+                 msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: tag_mqtt")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"tag_mqtt.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)

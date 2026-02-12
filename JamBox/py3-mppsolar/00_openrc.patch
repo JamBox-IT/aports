@@ -1,0 +1,1381 @@
+diff --git a/docs/configfile.md b/docs/configfile.md
+index 9594661..16977b0 100644
+--- a/docs/configfile.md
++++ b/docs/configfile.md
+@@ -20,6 +20,9 @@ mqtt_port=1883
+ mqtt_user=username
+ mqtt_pass=password
+ 
++# Daemon log file path and name can be configured, defaults to /var/log/mpp-solar.log
++log_file = /custom/path/to/mpp-solar.log
++ 
+ ### The section name needs to be unique
+ ### There can be multiple sections which are processed sequentially without pause
+ ### The pause occurs after all sections are processed, before the next loop
+diff --git a/mppsolar/__init__.py b/mppsolar/__init__.py
+index d77a1c6..9ecab98 100755
+--- a/mppsolar/__init__.py
++++ b/mppsolar/__init__.py
+@@ -1,14 +1,27 @@
+ # !/usr/bin/python3
++import os
+ import logging
+ import time
++import sys
+ from argparse import ArgumentParser
+ from platform import python_version
+ 
+ from mppsolar.version import __version__  # noqa: F401
+ 
+ from mppsolar.helpers import get_device_class
+-from mppsolar.daemon import get_daemon
++
++from mppsolar.daemon.pyinstaller_runtime import (
++    spawn_pyinstaller_subprocess,
++    is_pyinstaller_bundle,
++    has_been_spawned,
++    is_spawned_pyinstaller_process,
++  )
++from mppsolar.daemon import get_daemon, detect_daemon_type
+ from mppsolar.daemon import DaemonType
++from mppsolar.daemon.daemon import (
++    setup_daemon_logging,
++    daemonize,
++)
+ from mppsolar.libs.mqttbrokerc import MqttBroker
+ from mppsolar.outputs import get_outputs, list_outputs
+ from mppsolar.protocols import list_protocols
+@@ -19,6 +32,8 @@ FORMAT = "%(asctime)-15s:%(levelname)s:%(module)s:%(funcName)s@%(lineno)d: %(mes
+ logging.basicConfig(format=FORMAT)
+ 
+ 
++
++
+ def main():
+     description = f"Solar Device Command Utility, version: {__version__}, python version: {python_version()}"
+     parser = ArgumentParser(description=description)
+@@ -192,6 +207,16 @@ def main():
+         action="store_true",
+         help="Enable Debug and above (i.e. all) messages",
+     )
++    parser.add_argument(
++        "--pidfile",
++        help="Specifies the PID file location for daemon mode (default: /var/run/mpp-solar.pid, /tmp/mpp-solar.pid for PyInstaller)",
++        default=None,
++    )
++    parser.add_argument(
++        "--daemon-stop", 
++        action="store_true", 
++        help="Stop a running daemon (requires --pidfile if using non-default location)"
++    )
+     parser.add_argument("-I", "--info", action="store_true", help="Enable Info and above level messages")
+ 
+     args = parser.parse_args()
+@@ -199,7 +224,8 @@ def main():
+     if prog_name is None:
+         prog_name = "mpp-solar"
+     s_prog_name = prog_name.replace("-", "")
+-    # log_name = s_prog_name.upper()
++    log_file_path = "/var/log/mpp-solar.log"
++
+ 
+     # logging (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+     # Turn on debug if needed
+@@ -210,7 +236,7 @@ def main():
+     else:
+         # set default log level
+         log.setLevel(logging.WARNING)
+-    logging.basicConfig()
++
+ 
+     # Display version if asked
+     log.info(description)
+@@ -239,6 +265,139 @@ def main():
+     #     port: 1883
+     #     user: null
+     #     pass: null
++    # Handle daemon setup and stop requests
++
++    #### Extra Logging
++    def log_process_info(label, log_func=None):
++        """Log detailed process information for debugging"""
++        if log_func is None:
++            log_func = print
++    
++        pid = os.getpid()
++        ppid = os.getppid()
++    
++        # Get process group and session info
++        try:
++            pgid = os.getpgid(0)
++            sid = os.getsid(0)
++        except:
++            pgid = "unknown"
++            sid = "unknown"
++    
++        # Check if we're the process group leader
++        is_leader = (pid == pgid)
++    
++        log_func(f"[{label}] PID: {pid}, PPID: {ppid}, PGID: {pgid}, SID: {sid}, Leader: {is_leader}")
++    
++        # Log command line that started this process
++        try:
++            with open(f'/proc/{pid}/cmdline', 'r') as f:
++                cmdline = f.read().replace('\0', ' ').strip()
++            log_func(f"[{label}] Command: {cmdline}")
++        except:
++            log_func(f"[{label}] Command: {' '.join(sys.argv)}")
++
++    def log_debug_context(label, args):
++        log.debug(f"[{label}] sys.argv = {sys.argv}")
++        log.debug(f"[{label}] args.daemon = {args.daemon}")
++        log.debug(f"[{label}] args.debug = {args.debug}")
++
++    if args.debug:
++        if is_spawned_pyinstaller_process():
++            log_debug_context("CHILD", args)
++        elif is_pyinstaller_bundle():
++            log_debug_context("PARENT", args)
++        else:
++            log_debug_context("SYSTEM", args)
++
++
++    def setup_daemon_if_requested(args, log_file_path="/var/log/mpp-solar.log"):
++
++        if args.daemon:
++            os.environ["MPP_SOLAR_DAEMON"] = "1"
++            log.info("Daemon mode requested")
++
++            try:
++                daemon_type = detect_daemon_type()
++                log.info(f"Detected daemon type: {daemon_type}")
++            except Exception as e:
++                log.warning(f"Failed to detect daemon type: {e}, falling back to OpenRC")
++                daemon_type = DaemonType.OPENRC
++
++            daemon = get_daemon(daemontype=daemon_type)
++
++            if hasattr(daemon, 'set_pid_file_path') and args.pidfile:
++                daemon.set_pid_file_path(args.pidfile)
++                log.info(f"Using custom PID file: {args.pidfile}")
++            elif hasattr(daemon, 'pid_file_path'):
++                daemon.pid_file_path = "/tmp/mpp-solar.pid" if os.geteuid() != 0 else "/var/run/mpp-solar.pid"
++                log.info(f"Using default PID file: {daemon.pid_file_path}")
++
++            daemon.keepalive = 60
++
++            log.info("Attempting traditional daemonization...")
++            try:
++#                 daemonize()
++                log.info("Daemonized successfully")
++                # Re-setup logging for the daemonized process
++                if not setup_daemon_logging(log_file_path):
++                    sys.stderr.write("CRITICAL: Failed to setup file logging for daemon. Check permissions.\n")
++                else:
++                    log.info("Daemon file logging successfully re-initialized.")
++
++            except Exception as e:
++                log.error(f"Failed to daemonize process: {e}")
++                log.info("Continuing in foreground mode")
++
++            return daemon
++        else:
++            log.info("Daemon mode NOT requested. Using DISABLED daemon.")
++            daemon = get_daemon(daemontype=DaemonType.DISABLED)
++            log_process_info("DAEMON_DISABLED_CREATED", log.info)
++            return daemon
++
++
++    # --- Optional PyInstaller bootstrap cleanup ---
++    # To enable single-process daemon spawn logic (avoids PyInstaller parent):
++    #################################################################
++#     if spawn_pyinstaller_subprocess(args):
++#       sys.exit(0)
++# 
++#     from daemon.pyinstaller_runtime import setup_spawned_environment
++#     setup_spawned_environment()
++    #################################################################
++
++    # Handle daemon stop request
++    if args.daemon_stop:
++        pid_file_path = args.pidfile
++        if pid_file_path is None:
++            # Use default based on environment
++            if os.geteuid() != 0:  # Non-root check
++                pid_file_path = "/tmp/mpp-solar.pid"
++            else:
++                pid_file_path = "/var/run/mpp-solar.pid"
++
++        log.info(f"Attempting to stop daemon using PID file: {pid_file_path}")
++
++        try:
++            daemon_type = detect_daemon_type()
++            daemon_class = get_daemon(daemontype=daemon_type).__class__
++            if hasattr(daemon_class, 'stop_daemon'):
++                success = daemon_class.stop_daemon(pid_file_path)
++                if success:
++                    print("Daemon stopped successfully")
++                else:
++                    print("Failed to stop daemon")
++                sys.exit(0 if success else 1)
++            else:
++                print("Daemon stop functionality not available for this daemon type")
++                sys.exit(1)
++        except Exception as e:
++            print(f"Error stopping daemon: {e}")
++            sys.exit(1)
++
++
++    # mqttbroker setup
+     mqtt_broker = MqttBroker(
+         config={
+             "name": args.mqttbroker,
+@@ -266,29 +425,6 @@ def main():
+ 
+     _commands = []
+ 
+-    # Initialize Daemon
+-    if not args.daemon:
+-        daemon = get_daemon(daemontype=DaemonType.DISABLED)
+-    else:
+-        daemon = get_daemon(daemontype=DaemonType.SYSTEMD)
+-        daemon.keepalive = 60
+-    log.info(daemon)
+-
+-
+-    # if args.daemon:
+-    #     try:
+-    #         import systemd.daemon
+-    #     except ImportError:
+-    #         print("You are missing dependencies in order to be able to use the --daemon flag.")
+-    #         print("To install them, use that command:")
+-    #         print("    python -m pip install 'mppsolar[systemd]'")
+-    #         exit(1)
+-
+-    # Tell systemd that our service is ready
+-    daemon.initialize()
+-    daemon.notify("Service Initializing ...")
+-    # set some default-defaults
+-    pause = 60
+ 
+     # If config file specified, process
+     if args.configfile:
+@@ -314,6 +450,7 @@ def main():
+         mqtt_broker.update("port", config["SETUP"].getint("mqtt_port", fallback=None))
+         mqtt_broker.update("username", config["SETUP"].get("mqtt_user", fallback=None))
+         mqtt_broker.update("password", config["SETUP"].get("mqtt_pass", fallback=None))
++        log_file_path = config["SETUP"].get("log_file", fallback="/var/log/mpp-solar.log")
+         sections.remove("SETUP")
+ 
+         # Process 'command' sections
+@@ -361,7 +498,7 @@ def main():
+             for command in commands:
+                 _commands.append((device, command, tag, outputs, filter, excl_filter))
+             log.debug(f"Commands from config file {_commands}")
+-
++            log.debug(f"[DAEMON LOOP INIT] args.daemon={args.daemon}, pause={pause}, commands={_commands}")
+             if args.daemon:
+                 print(f"Config file: {args.configfile}")
+                 print(f"Config setting - pause: {pause}")
+@@ -395,7 +532,6 @@ def main():
+             push_url=push_url,
+             prom_output_dir=prom_output_dir,
+         )
+-        #
+ 
+         # determine whether to run command or call helper function
+         commands = []
+@@ -429,6 +565,20 @@ def main():
+             _commands.append((device, command, tag, outputs, filter, excl_filter))
+         log.debug(f"Commands {_commands}")
+ 
++
++    # ------------------------
++    # Daemon setup and logging
++    # ------------------------
++    daemon = setup_daemon_if_requested(args, log_file_path=log_file_path)
++    log.info(daemon)
++    DAEMON_MODE = args.daemon
++    # Notify systemd/init
++    daemon.initialize()
++    log_process_info("AFTER_DAEMON_INITIALIZE", log.info)
++    daemon.notify("Service Initializing ...")
++    log_process_info("AFTER_DAEMON_NOTIFY", log.info)
++
++
+     while True:
+         # Loop through the configured commands
+         if not args.daemon:
+@@ -466,16 +616,22 @@ def main():
+                     excl_filter=excl_filter,
+                     keep_case=keep_case,
+                 )
++        try:
+                 # Tell systemd watchdog we are still alive
+-        if args.daemon:
+-            daemon.watchdog()
+-            print(f"Sleeping for {pause} sec")
+-            time.sleep(pause)
+-        else:
+-            # Dont loop unless running as daemon
+-            log.debug("Not daemon, so not looping")
+-            break
++#            if args.daemon:
++            if DAEMON_MODE:
++                daemon.watchdog()
++                print(f"Sleeping for {pause} sec")
++                time.sleep(pause)
++            else:
++                # Dont loop unless running as daemon
++                log.debug("Not daemon, so not looping")
++                break
++        except Exception as e:
++            log.error(f"[LOOP ERROR] Exception in daemon loop: {e}", exc_info=True)
++            time.sleep(5)  # Prevent tight loop in case of recurring errors
+ 
+ 
+ if __name__ == "__main__":
+     main()
++
+diff --git a/mppsolar/daemon/__init__.py b/mppsolar/daemon/__init__.py
+index d8eed7f..b8b2d9e 100644
+--- a/mppsolar/daemon/__init__.py
++++ b/mppsolar/daemon/__init__.py
+@@ -1,9 +1,10 @@
+-from enum import Enum, auto
++from enum import Enum
+ 
+ class DaemonType(Enum):
+     """ Daemon types implemented """
+     DISABLED = "disabled"
+     SYSTEMD = "systemd"
++    OPENRC = "openrc"
+ 
+ def get_daemon(daemontype):
+     match daemontype:
+@@ -13,5 +14,24 @@ def get_daemon(daemontype):
+         case DaemonType.SYSTEMD:
+             from .daemon_systemd import DaemonSystemd as daemon
+             return daemon()
++        case DaemonType.OPENRC:
++            from .daemon_openrc import DaemonOpenRC as daemon
++            return daemon()
+         case _:
+-            raise Exception(f"unknown daemontype {daemontype}")
+\ No newline at end of file
++            raise Exception(f"unknown daemontype {daemontype}")
++
++def detect_daemon_type():
++    """ Auto-detect the appropriate daemon type for the system """
++    import os
++    import shutil
++    
++    # Check if systemd is available
++    if shutil.which('systemctl') and os.path.exists('/run/systemd/system'):
++        return DaemonType.SYSTEMD
++    
++    # Check if OpenRC is available
++    if shutil.which('rc-service') or os.path.exists('/sbin/openrc'):
++        return DaemonType.OPENRC
++    
++    # Default to disabled/generic daemon
++    return DaemonType.OPENRC  # Use OpenRC implementation as fallback since it handles signals
+diff --git a/mppsolar/daemon/daemon.py b/mppsolar/daemon/daemon.py
+index e0c6f9e..e45cf20 100644
+--- a/mppsolar/daemon/daemon.py
++++ b/mppsolar/daemon/daemon.py
+@@ -1,4 +1,5 @@
+ """ daemon.py """
++import os
+ import logging
+ from enum import Enum, auto
+ from time import time
+@@ -6,17 +7,136 @@ from time import time
+ # Set-up logger
+ log = logging.getLogger("daemon")
+ 
++def setup_daemon_logging(log_file="/var/log/mpp-solar.log"):
++    """Setup logging for daemon mode"""
++    try:
++        # Create log directory if it doesn't exist
++        log_dir = os.path.dirname(log_file)
++        os.makedirs(log_dir, exist_ok=True)
++
++        # Setup file logging
++        file_handler = logging.FileHandler(log_file)
++        file_handler.setLevel(logging.WARNING)
++
++        # Setup formatter
++        formatter = logging.Formatter(
++            '%(asctime)s:%(levelname)s:%(module)s:%(funcName)s@%(lineno)d: %(message)s'
++        )
++        file_handler.setFormatter(formatter)
++
++        # Get root logger and add handler
++        root_logger = logging.getLogger()
++        root_logger.addHandler(file_handler)
++
++        return True
++    except Exception as e:
++        print(f"Failed to setup daemon logging: {e}")
++        return False
++
++
++def daemonize():
++    """
++    Properly daemonize the process (Unix double-fork)
++    Enhanced for PyInstaller compatibility
++    """
++    import logging
++    from mppsolar.daemon.pyinstaller_runtime import is_pyinstaller_bundle, has_been_spawned
++
++    log = logging.getLogger("daemon")
++    pid = os.getpid()
++    ppid = os.getppid()
++    log.info(f"[DAEMONIZE] Before fork PID: {pid}, PPID: {ppid}")
++
++    # Special handling for PyInstaller spawned processes
++    if is_pyinstaller_bundle() and has_been_spawned():
++        log.info("[DAEMONIZE] Running in spawned PyInstaller process - using modified daemonization")
++        
++        # We're already in a subprocess, so we can do a simpler daemonization
++        # Just do a single fork and session setup
++        try:
++            pid = os.fork()
++            if pid > 0:
++                log.info(f"[DAEMONIZE] Fork successful, parent exiting. Child PID: {pid}")
++                sys.exit(0)
++        except OSError as e:
++            log.error(f"Fork failed in spawned PyInstaller process: {e}")
++            sys.exit(1)
++
++        # Set up daemon environment
++        os.chdir("/")
++        os.setsid()
++        os.umask(0)
++        
++        # Redirect standard file descriptors
++        sys.stdout.flush()
++        sys.stderr.flush()
++        try:
++            with open('/dev/null', 'r') as si: # Disable only while testing.
++                os.dup2(si.fileno(), sys.stdin.fileno())
++            with open('/dev/null', 'a+') as so:
++                os.dup2(so.fileno(), sys.stdout.fileno())
++            with open('/dev/null', 'a+') as se:
++                os.dup2(se.fileno(), sys.stderr.fileno())
++            log.info("[DAEMONIZE] Standard I/O redirected to /dev/null.") # This log won't appear on console
++        except Exception as e:
++            pass # Keep original pass here, as the log might not work yet
++        log.info(f"[DAEMONIZE] PyInstaller daemon process ready. PID: {os.getpid()}")
++        return
++
++    # Standard daemonization for non-PyInstaller or direct execution
++    try:
++        pid = os.fork()
++        if pid > 0:
++            log.info(f"[DAEMONIZE] First fork successful, parent exiting. Child PID: {pid}")
++            sys.exit(0)
++    except OSError as e:
++        log.error(f"First fork failed: {e}")
++        sys.exit(1)
++
++    os.chdir("/")
++    os.setsid()
++    os.umask(0)
++
++    try:
++        pid = os.fork()
++        if pid > 0:
++            log.info(f"[DAEMONIZE] Second fork successful, intermediate parent exiting. Child PID: {pid}")
++            sys.exit(0)
++    except OSError as e:
++        log.error(f"Second fork failed: {e}")
++        sys.exit(1)
++
++    # Redirect standard file descriptors to /dev/null
++    sys.stdout.flush()
++    sys.stderr.flush()
++    with open('/dev/null', 'r') as si:  # Disabled while testing pyinstaller code
++        os.dup2(si.fileno(), sys.stdin.fileno())
++    with open('/dev/null', 'a+') as so:
++        os.dup2(so.fileno(), sys.stdout.fileno())
++    with open('/dev/null', 'a+') as se:
++        os.dup2(se.fileno(), sys.stderr.fileno())
++
++    log.info(f"[DAEMONIZE] Daemon process forked successfully. PID: {os.getpid()}")
++
++
++
+ class Daemon:
+     """ abstraction to support different daemon approaches / solutions """
+     def __str__(self):
+-        return f"Daemon name: {self.type}"
++        return f"Daemon name: {self.__class__.__name__}"
+ 
+     def initialize(self):
+         """ Daemon initialization activities """
++        log.debug("Base Daemon initialized")
+         self._notify(self._Notification.READY)
+         self._lastNotify = time()
+ 
++    def get_watchdog_path(self):
++        """Return the path for the watchdog file, derived from the PID file path."""
++        return self.pid_file_path.replace(".pid", ".watchdog")
++
+     def watchdog(self):
++        log.debug("Base Daemon watchdog ping")
+         elapsed = time() - self._lastNotify
+         if (elapsed) > self.keepalive:
+             self._notify(self._Notification.WATCHDOG)
+@@ -31,7 +151,25 @@ class Daemon:
+         # Send stopping
+         self._notify(self._Notification.STOPPING)
+ 
++    def _get_effective_pid(self):
++        """Return the PID to use for tracking this daemon.
++        For PyInstaller parent processes, return os.getppid().
++        For normal or spawned PyInstaller processes, return os.getpid().
++        Place holder"""
++        from mppsolar.daemon.pyinstaller_runtime import is_pyinstaller_bundle, is_spawned_pyinstaller_process
++        if is_pyinstaller_bundle() and not is_spawned_pyinstaller_process():
++            return os.getpid()
++        return os.getpid()
++
++
+     def log(self, message=None):
+         # Print log message
+         if message is not None:
+             self._journal(message)
++    
++    # These methods should be overridden by subclasses
++    def _notify(self, notification, message=None):
++        pass
++    
++    def _journal(self, message):
++        pass
+\ No newline at end of file
+diff --git a/mppsolar/daemon/daemon_disabled.py b/mppsolar/daemon/daemon_disabled.py
+index 55f6a5f..7c6a9c2 100644
+--- a/mppsolar/daemon/daemon_disabled.py
++++ b/mppsolar/daemon/daemon_disabled.py
+@@ -28,7 +28,9 @@ class DaemonDummy(Daemon):
+         # self.notify(f"got daemon type: {self.type}, keepalive: {self.keepalive}")
+ 
+     def _dummyNotify(self, *args, **kwargs):
++        log.debug(f"DaemonDummy notified: args={args}, kwargs={kwargs}")
+         # Print log message
+         # if args:
+         #     print(args[0])
+         return
++
+diff --git a/mppsolar/daemon/daemon_openrc.py b/mppsolar/daemon/daemon_openrc.py
+new file mode 100644
+index 0000000..751e288
+--- /dev/null
++++ b/mppsolar/daemon/daemon_openrc.py
+@@ -0,0 +1,470 @@
++""" daemon_openrc.py - Fixed version for PyInstaller compatibility """
++import logging
++import os
++from mppsolar.daemon.pyinstaller_runtime import handle_stale_pid
++import signal
++import sys
++import time
++import atexit
++from enum import Enum
++from pathlib import Path
++
++try:
++    import psutil
++    HAS_PSUTIL = True
++except ImportError:
++    HAS_PSUTIL = False
++
++from mppsolar.daemon.daemon import Daemon
++
++# Set-up logger
++log = logging.getLogger("daemon_openrc")
++
++
++class OpenRCNotification(Enum):
++    READY = "READY"
++    STATUS = "STATUS"
++    STOPPING = "STOPPING"
++    WATCHDOG = "WATCHDOG"
++
++class DaemonOpenRC(Daemon):
++    """ OpenRC daemon implementation with signal handling and configurable PID management """
++
++    def __str__(self):
++        return f"Daemon OpenRC (PID file: {self.pid_file_path})"
++
++    def __init__(self, pid_file_path=None):
++        import logging
++        log = logging.getLogger("daemon_openrc")
++    
++        pid = os.getpid()
++        ppid = os.getppid()
++        log.info(f"[OPENRC_INIT] Creating OpenRC daemon: PID={pid}, PPID={ppid}")
++    
++        self._Notification = OpenRCNotification
++        self.keepalive = 60
++        self._lastNotify = time.time()
++        self._pid_file = None
++        self._running = True
++        self._pid_file_created = False  # NEW: Track if we created the PID file
++
++        # Set PID file location with smart defaults
++        if pid_file_path:
++            self.pid_file_path = pid_file_path
++        else:
++            # Auto-determine based on permissions and environment
++            if os.geteuid() == 0:  # Running as root
++                self.pid_file_path = "/var/run/mpp-solar.pid"
++            else:  # Non-root user
++                # Try user-specific locations
++                if 'XDG_RUNTIME_DIR' in os.environ:
++                    self.pid_file_path = os.path.join(os.environ['XDG_RUNTIME_DIR'], "mpp-solar.pid")
++                else:
++                    self.pid_file_path = "/tmp/mpp-solar.pid"
++
++        log.info(f"PID file will be created at: {self.pid_file_path}")
++
++        # Register cleanup function to run on exit
++        atexit.register(self._cleanup_pid_file)
++
++        # Set up signal handlers
++        signal.signal(signal.SIGTERM, self._signal_handler)
++        signal.signal(signal.SIGINT, self._signal_handler)
++
++        # Optional: Handle SIGHUP for config reload
++        signal.signal(signal.SIGHUP, self._sighup_handler)
++
++    def set_pid_file_path(self, path):
++        """Allow external setting of PID file path"""
++        old_path = self.pid_file_path
++        self.pid_file_path = path
++        log.info(f"PID file path changed from {old_path} to {self.pid_file_path}")
++
++    def _signal_handler(self, signum, frame):
++        """ Handle SIGTERM and SIGINT for clean shutdown """
++        log.info(f"Received signal {signum}, initiating clean shutdown...")
++        self._running = False
++        self.stop()
++        self._cleanup_pid_file()
++        sys.exit(0)
++
++    def _sighup_handler(self, signum, frame):
++        """ Handle SIGHUP for potential config reload """
++        log.info("Received SIGHUP - config reload not implemented yet")
++        # Future: implement config reload functionality
++
++    def _check_existing_daemon(self):
++        """Check if daemon with PID from file is actually running"""
++        try:
++            with open(self.pid_file_path, 'r') as pid_file:
++                content = pid_file.read().strip()
++                if not content:
++                    log.warning("PID file is empty")
++                    return False
++
++                pid = int(content)
++                current_pid = os.getpid()
++
++                # If the PID in the file is our current PID, that's fine
++                if pid == current_pid:
++                    log.info(f"PID file contains our own PID {pid}, continuing")
++                    return False
++
++                log.debug(f"Checking if PID {pid} is running...")
++
++                if HAS_PSUTIL:
++                    # Use psutil if available for more reliable process checking
++                    try:
++                        process = psutil.Process(pid)
++                        if process.is_running():
++                            # Additional check - is it actually our process name?
++                            try:
++                                process_name = process.name()
++                                cmdline = ' '.join(process.cmdline())
++                                log.info(f"Process {pid} is running: {process_name}")
++                                log.debug(f"Process {pid} cmdline: {cmdline}")
++
++                                # Check if it's likely our own process (mpp-solar related)
++                                if 'mpp-solar' in process_name or 'mpp-solar' in cmdline:
++                                    return True
++                                else:
++                                    log.warning(f"Process {pid} exists but doesn't appear to be mpp-solar")
++                                    return False
++                            except (psutil.AccessDenied, psutil.ZombieProcess):
++                                # If we can't get process details, assume it's running
++                                return True
++                        else:
++                            log.info(f"Process {pid} is not running")
++                            return False
++                    except psutil.NoSuchProcess:
++                        log.info(f"No process found with PID {pid}")
++                        return False
++                else:
++                    # Fallback to os.kill method
++                    try:
++                        # Send signal 0 to check if process exists without killing it
++                        os.kill(pid, 0)
++                        log.info(f"Process {pid} exists and is running")
++                        return True
++                    except OSError:
++                        log.info(f"No process found with PID {pid}")
++                        return False
++
++        except (ValueError, FileNotFoundError, PermissionError) as e:
++            log.warning(f"Could not check existing daemon: {e}")
++            return False
++
++    def _safe_import_pyinstaller_runtime(self):
++        """
++        Safely import PyInstaller runtime functions with fallback
++        Returns tuple: (is_pyinstaller_bundle_func, has_been_spawned_func)
++        """
++        try:
++            from mppsolar.daemon.pyinstaller_runtime import is_pyinstaller_bundle, has_been_spawned
++            return is_pyinstaller_bundle, has_been_spawned
++        except ImportError:
++            log.debug("Could not import pyinstaller_runtime, using fallback functions")
++            # Fallback functions that return safe defaults
++            def fallback_is_pyinstaller_bundle():
++                return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
++
++            def fallback_has_been_spawned():
++                return os.environ.get("MPP_SOLAR_SPAWNED") == "1"
++
++            return fallback_is_pyinstaller_bundle, fallback_has_been_spawned
++
++    
++
++            if not os.path.exists(self.pid_file_path):
++                return False
++
++            with open(self.pid_file_path, 'r') as pid_file:
++                content = pid_file.read().strip()
++                if not content:
++                    return False
++
++                old_pid = int(content)
++                current_pid = os.getpid()
++
++                if old_pid == current_pid:
++                    return False
++
++                # Check if the old PID is still running
++                if HAS_PSUTIL:
++                    try:
++                        process = psutil.Process(old_pid)
++                        if process.is_running():
++                            cmdline = ' '.join(process.cmdline())
++                            # If it's a PyInstaller bootstrap process, it's likely stale
++                            if 'mpp-solar' in cmdline and process.ppid() != os.getppid():
++                                log.info(f"Detected potential stale PyInstaller bootstrap PID {old_pid}")
++                                return True
++                    except (psutil.NoSuchProcess, psutil.AccessDenied):
++                        # Process doesn't exist, definitely stale
++                        return True
++                else:
++                    # Fallback: if we can't signal the process, assume it's stale
++                    try:
++                        os.kill(old_pid, 0)
++                        return False  # Process exists
++                    except OSError:
++                        return True  # Process doesn't exist, stale
++
++        except Exception as e:
++            log.debug(f"Error checking for stale PyInstaller PID: {e}")
++
++        return False
++
++    def _create_pid_file(self):
++        """ Create PID file with current process ID """
++        pid = self._get_effective_pid()
++        log.info(f"Creating PID file {self.pid_file_path} with PID {pid}")
++
++        try:
++            # Ensure directory exists and is writable
++            pid_dir = Path(self.pid_file_path).parent
++            pid_dir.mkdir(parents=True, exist_ok=True)
++            log.debug(f"PID directory ensured: {pid_dir}")
++
++            # Check directory permissions
++            if not os.access(pid_dir, os.W_OK):
++                log.error(f"No write permission for PID directory: {pid_dir}")
++                return False
++
++            # Check if file already exists and handle appropriately
++            if os.path.exists(self.pid_file_path):
++                log.warning(f"PID file {self.pid_file_path} already exists, checking if daemon is running...")
++
++                # Special handling for PyInstaller stale PIDs
++                if not handle_stale_pid(
++                    self.pid_file_path,
++                    *self._safe_import_pyinstaller_runtime(),
++                    self._check_existing_daemon,
++                ):
++                    return False
++                elif self._check_existing_daemon():
++                    log.error("Another daemon instance is already running")
++                    return False
++                else:
++                    log.info("Removing stale PID file")
++                    try:
++                        os.remove(self.pid_file_path)
++                    except Exception as e:
++                        log.error(f"Failed to remove stale PID file: {e}")
++                        return False
++
++            # Create PID file with explicit write and flush
++            try:
++                # Use atomic write operation where possible
++                temp_pid_file = f"{self.pid_file_path}.tmp"
++
++                with open(temp_pid_file, 'w') as pid_file:
++                    pid_file.write(str(pid))
++                    pid_file.flush()  # Ensure data is written to disk
++                    os.fsync(pid_file.fileno())  # Force kernel to write to disk
++
++                # Atomically move temp file to final location
++                os.rename(temp_pid_file, self.pid_file_path)
++
++                log.info(f"Successfully created PID file: {self.pid_file_path} with PID {pid}")
++                self._pid_file_created = True  # NEW: Mark that we created it
++
++                # Verify the file was written correctly
++                with open(self.pid_file_path, 'r') as verify_file:
++                    written_pid = verify_file.read().strip()
++                    if written_pid != str(pid):
++                        log.error(f"PID file verification failed: expected {pid}, got '{written_pid}'")
++                        return False
++                    log.debug(f"PID file verification successful: {written_pid}")
++
++                return True
++
++            except Exception as e:
++                log.error(f"Failed to write to PID file {self.pid_file_path}: {e}")
++                # Clean up temporary file if it exists
++                temp_pid_file = f"{self.pid_file_path}.tmp"
++                if os.path.exists(temp_pid_file):
++                    try:
++                        os.remove(temp_pid_file)
++                    except:
++                        pass
++                return False
++
++        except Exception as e:
++            log.error(f"Failed to create PID file {self.pid_file_path}: {e}")
++            return False
++
++    def _cleanup_pid_file(self):
++        """ Remove PID file on shutdown """
++        # Only clean up if we created the PID file
++        if not self._pid_file_created:
++            log.debug("Skipping PID file cleanup - we didn't create it")
++            return
++            
++        try:
++            if os.path.exists(self.pid_file_path):
++                # Verify it's our PID before removing
++                try:
++                    with open(self.pid_file_path, 'r') as pid_file:
++                        content = pid_file.read().strip()
++                        if content and int(content) == os.getpid():
++                            os.remove(self.pid_file_path)
++                            log.info(f"Removed PID file: {self.pid_file_path}")
++                        else:
++                            log.warning(f"PID file contains different PID ({content}), not removing")
++                except (ValueError, FileNotFoundError):
++                    # File doesn't exist or has invalid content, try to remove anyway
++                    os.remove(self.pid_file_path)
++                    log.info(f"Removed PID file: {self.pid_file_path}")
++        except Exception as e:
++            log.error(f"Failed to remove PID file {self.pid_file_path}: {e}")
++        #----- clean up watchdog file ----#
++        watchdog_path = self.get_watchdog_path()
++        if os.path.exists(watchdog_path):
++            try:
++                os.remove(watchdog_path)
++                log.info(f"Removed watchdog file: {watchdog_path}")
++            except Exception as e:
++                log.warning(f"Failed to remove watchdog file: {e}")
++
++    def initialize(self):
++        """Initialize daemon and create PID file"""
++        log.info("Initializing OpenRC daemon...")
++
++        pid = os.getpid()
++        ppid = os.getppid()
++        log.info(f"[OPENRC_INITIALIZE] Before PID file creation: PID={pid}, PPID={ppid}")
++
++        # Create PID file
++        if not self._create_pid_file():
++            log.error("Failed to create PID file, daemon cannot start")
++            sys.exit(1)
++        log.info(f"[OPENRC_INITIALIZE] After PID file creation: PID={pid}, PPID={ppid}")
++
++        # Call parent initialization
++        super().initialize()
++        log.info("OpenRC daemon initialized successfully")
++
++    def stop(self):
++        """Stop daemon and clean up"""
++        log.info("Stopping OpenRC daemon...")
++        self._running = False
++        super().stop()
++
++    def is_running(self):
++        """Check if daemon should continue running"""
++        return self._running
++
++    @classmethod
++    def stop_daemon(cls, pid_file_path):
++        """Class method to stop a running daemon by PID file"""
++        log.info(f"Attempting to stop daemon using PID file: {pid_file_path}")
++
++        try:
++            if not os.path.exists(pid_file_path):
++                log.error(f"PID file not found: {pid_file_path}")
++                return False
++
++            with open(pid_file_path, 'r') as pid_file:
++                content = pid_file.read().strip()
++                if not content:
++                    log.error("PID file is empty")
++                    return False
++
++                pid = int(content)
++                log.info(f"Found PID {pid} in file, attempting to terminate...")
++
++                # Check if process exists before trying to kill it
++                try:
++                    os.kill(pid, 0)  # Signal 0 just checks if process exists
++                except OSError:
++                    log.warning(f"Process {pid} not found, removing stale PID file")
++                    try:
++                        os.remove(pid_file_path)
++                    except:
++                        pass
++                    return True  # Consider this success since daemon isn't running
++
++                # Try graceful shutdown first (SIGTERM)
++                try:
++                    log.info(f"Sending SIGTERM to PID {pid}")
++                    os.kill(pid, signal.SIGTERM)
++
++                    # Wait a bit for graceful shutdown
++                    for i in range(10):  # Wait up to 10 seconds
++                        time.sleep(1)
++                        try:
++                            os.kill(pid, 0)  # Check if still running
++                        except OSError:
++                            # Process has terminated
++                            log.info(f"Process {pid} terminated gracefully")
++                            # Clean up PID file if it still exists
++                            if os.path.exists(pid_file_path):
++                                try:
++                                    os.remove(pid_file_path)
++                                    log.info(f"Removed PID file: {pid_file_path}")
++                                except:
++                                    pass
++                            return True
++
++                    # If still running, try SIGKILL
++                    log.warning(f"Process {pid} didn't respond to SIGTERM, sending SIGKILL")
++                    os.kill(pid, signal.SIGKILL)
++
++                    # Wait for force kill
++                    for i in range(5):  # Wait up to 5 seconds
++                        time.sleep(1)
++                        try:
++                            os.kill(pid, 0)  # Check if still running
++                        except OSError:
++                            # Process has terminated
++                            log.info(f"Process {pid} terminated forcefully")
++                            # Clean up PID file
++                            if os.path.exists(pid_file_path):
++                                try:
++                                    os.remove(pid_file_path)
++                                    log.info(f"Removed PID file: {pid_file_path}")
++                                except:
++                                    pass
++                            return True
++
++                    log.error(f"Failed to terminate process {pid}")
++                    return False
++
++                except OSError as e:
++                    log.error(f"Failed to send signal to process {pid}: {e}")
++                    return False
++
++        except (ValueError, FileNotFoundError, PermissionError) as e:
++            log.error(f"Error stopping daemon: {e}")
++            return False
++            
++            
++    def watchdog(self):
++        """OpenRC watchdog heartbeat"""
++        now = time.time()
++        time_since_last = now - self._lastNotify
++        self._lastNotify = now
++
++        log.debug(f"[WATCHDOG] Ping at {time.strftime('%Y-%m-%d %H:%M:%S')} (Δ {time_since_last:.2f}s)")
++
++        # Use PID-derived watchdog path
++        watchdog_path = self.get_watchdog_path()
++
++        try:
++            with open(watchdog_path, "w") as f:
++                f.write(f"watchdog ping: {int(now)}\n")
++        except Exception as e:
++            log.warning(f"Watchdog write failed: {e}")
++
++
++    def _notify(self, notification, message=None):
++        """Handle daemon notifications"""
++        if message:
++            log.info(f"Daemon notification: {notification.value} - {message}")
++        else:
++            log.debug(f"Daemon notification: {notification.value}")
++
++    def _journal(self, message):
++        """Log message to system journal (or regular log)"""
++        log.info(message)
+\ No newline at end of file
+diff --git a/mppsolar/daemon/pyinstaller_runtime.py b/mppsolar/daemon/pyinstaller_runtime.py
+new file mode 100644
+index 0000000..c4ec790
+--- /dev/null
++++ b/mppsolar/daemon/pyinstaller_runtime.py
+@@ -0,0 +1,296 @@
++""" pyinstaller_runtime.py """
++import os
++import sys
++import time
++import subprocess
++import logging
++import shutil
++import tempfile
++import atexit
++
++log = logging.getLogger(__name__)
++
++
++def is_pyinstaller_bundle():
++    # True if running in a PyInstaller bundle
++    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
++
++
++def has_been_spawned():
++    val = os.environ.get("MPP_SOLAR_SPAWNED")
++    log.info(f"has_been_spawned(): MPP_SOLAR_SPAWNED={val}")
++    return val == "1"
++
++def is_spawned_pyinstaller_process():
++    return is_pyinstaller_bundle() and has_been_spawned()
++
++
++def copy_essential_files():
++    """
++    Copy essential files from PyInstaller temp dir to a permanent location
++    Returns the permanent directory path
++    """
++    if not is_pyinstaller_bundle():
++        return None
++
++    try:
++        # Create a permanent directory for our files
++        permanent_dir = tempfile.mkdtemp(prefix="mpp_solar_", suffix="_daemon")
++        log.info(f"Created permanent directory: {permanent_dir}")
++
++        # Copy the entire extracted directory to permanent location
++        meipass_contents = os.listdir(sys._MEIPASS)
++        for item in meipass_contents:
++            src = os.path.join(sys._MEIPASS, item)
++            dst = os.path.join(permanent_dir, item)
++
++            if os.path.isdir(src):
++                shutil.copytree(src, dst, symlinks=True)
++            else:
++                shutil.copy2(src, dst)
++
++        # Make sure the main script is executable
++        main_script = os.path.join(permanent_dir, 'mpp-solar')
++        if os.path.exists(main_script):
++            os.chmod(main_script, 0o755)
++
++        return permanent_dir
++
++    except Exception as e:
++        log.error(f"Failed to copy essential files: {e}")
++        return None
++
++
++def setup_permanent_environment(permanent_dir):
++    """Set up environment to use permanent directory instead of _MEIPASS"""
++    if permanent_dir:
++        # Update sys.path to use permanent directory
++        if sys._MEIPASS in sys.path:
++            sys.path.remove(sys._MEIPASS)
++        sys.path.insert(0, permanent_dir)
++
++        # Update _MEIPASS to point to permanent directory
++        sys._MEIPASS = permanent_dir
++        
++        # Register cleanup for permanent directory
++        atexit.register(cleanup_permanent_directory, permanent_dir)
++        
++        log.info(f"Environment updated to use permanent directory: {permanent_dir}")
++
++
++def cleanup_permanent_directory(permanent_dir):
++    """Clean up the permanent directory on exit"""
++    try:
++        if os.path.exists(permanent_dir):
++            shutil.rmtree(permanent_dir)
++            log.info(f"Cleaned up permanent directory: {permanent_dir}")
++    except Exception as e:
++        log.warning(f"Failed to clean up permanent directory {permanent_dir}: {e}")
++
++
++def _log_runtime_context(label, log_func=None):
++    if log_func is None:
++        log_func = log.debug
++
++    pid = os.getpid()
++    ppid = os.getppid()
++    try:
++        pgid = os.getpgid(0)
++        sid = os.getsid(0)
++    except OSError:
++        pgid = "unknown"
++        sid = "unknown"
++
++    is_leader = (pid == pgid)
++    frozen = getattr(sys, 'frozen', False)
++    meipass = getattr(sys, '_MEIPASS', 'N/A')
++    spawned = os.environ.get("MPP_SOLAR_SPAWNED", "N/A")
++    permanent_dir = os.environ.get("MPP_SOLAR_PERMANENT_DIR", "N/A")
++
++    log_func(f"[{label}] Process Info: PID={pid}, PPID={ppid}, PGID={pgid}, SID={sid}, Leader={is_leader}")
++    log_func(f"[{label}] Sys Info: sys.frozen={frozen}, _MEIPASS={meipass}")
++    log_func(f"[{label}] Env Info: MPP_SOLAR_SPAWNED={spawned}, MPP_SOLAR_PERMANENT_DIR={permanent_dir}")
++    log_func(f"[{label}] Current Working Dir: {os.getcwd()}")
++
++
++def cleanup_bootstrap_pid_file(pid_file_path):
++    """
++    Clean up PID file created by bootstrap process
++    """
++    try:
++        if os.path.exists(pid_file_path):
++            # Check if the PID in the file is our bootstrap process
++            with open(pid_file_path, 'r') as f:
++                bootstrap_pid = int(f.read().strip())
++
++            current_pid = os.getpid()
++
++            if bootstrap_pid == current_pid:
++                log.info(f"Removing bootstrap PID file {pid_file_path} (PID {bootstrap_pid})")
++                os.remove(pid_file_path)
++            else:
++                log.debug(f"PID file contains different PID {bootstrap_pid}, not our bootstrap PID {current_pid}")
++
++    except Exception as e:
++        log.warning(f"Failed to cleanup bootstrap PID file {pid_file_path}: {e}")
++
++
++def spawn_pyinstaller_subprocess(args):
++    """
++    Handles PyInstaller bootstrap-spawn logic to prevent premature termination
++    of daemonized processes.
++    Returns True if a subprocess is spawned and parent should exit.
++    """
++    _log_runtime_context("PR_PARENT_ENTRY", log.debug)
++    if args.daemon and is_pyinstaller_bundle() and not has_been_spawned():
++        log.warning("Running from PyInstaller — spawning subprocess to survive bootstrap parent")
++        _log_runtime_context("PR_PARENT_BEFORE_FORK", log.info)
++
++        # Clean up any PID file created by the bootstrap process
++        pid_file_paths = []
++
++        # Try to determine the PID file path that might have been created
++        if hasattr(args, 'pid_file') and args.pid_file:
++            pid_file_paths.append(args.pid_file)
++
++        # Add common default locations
++        if os.geteuid() == 0:  # Running as root
++            pid_file_paths.extend(["/var/run/mpp-solar.pid", "/var/run/mppsolard.pid"])
++        else:
++            if 'XDG_RUNTIME_DIR' in os.environ:
++                pid_file_paths.append(os.path.join(os.environ['XDG_RUNTIME_DIR'], "mpp-solar.pid"))
++            pid_file_paths.append("/tmp/mpp-solar.pid")
++
++        # Clean up bootstrap-created PID files
++        for pid_file_path in pid_file_paths:
++            cleanup_bootstrap_pid_file(pid_file_path)
++
++        # Create permanent copy of extracted files
++        permanent_dir = copy_essential_files()
++        if not permanent_dir:
++            log.critical("Failed to create permanent copy of files")
++            return False
++
++        new_env = os.environ.copy()
++        new_env["MPP_SOLAR_SPAWNED"] = "1"
++        new_env["MPP_SOLAR_PERMANENT_DIR"] = permanent_dir
++
++        # NEW: Pass information about cleaned up PID files
++        new_env["MPP_SOLAR_CLEANED_PID_FILES"] = ",".join(pid_file_paths)
++
++        executable = os.path.join(permanent_dir, os.path.basename(sys.executable))
++        if not os.path.exists(executable):
++            executable = sys.executable
++
++        cmd_args = sys.argv[1:]
++        if "--daemon" not in cmd_args:
++            cmd_args.append("--daemon")
++
++        cmd = [executable] + cmd_args
++
++        log.info(f"Launching child with cmd: {' '.join(cmd)}")
++        log.debug(f"Spawning child subprocess: {cmd}")
++        log.debug(f"Working directory: {permanent_dir}")
++        _log_runtime_context("PR_PARENT_SPAWNING", log.warning)
++        log.warning(f"[SPAWN] sys.argv: {sys.argv}")
++        log.warning(f"[SPAWN] final cmd: {cmd}")
++        log.warning(f"[SPAWN] is_pyinstaller_bundle: {is_pyinstaller_bundle()}")
++        log.warning(f"[SPAWN] has_been_spawned: {has_been_spawned()}")
++        log.warning(f"[SPAWN] args.daemon: {args.daemon}")
++#         print("ENV:", dict(os.environ)) # troubleshooting
++
++        try:
++            proc = subprocess.Popen(
++                cmd, 
++                env=new_env, 
++                cwd=permanent_dir,
++                start_new_session=True,
++                stdout=subprocess.DEVNULL,
++                stderr=subprocess.DEVNULL,
++                stdin=subprocess.DEVNULL
++            )
++
++            # Wait a bit to ensure child process starts successfully
++            for i in range(10):
++                if proc.poll() is not None:
++                    if proc.returncode == 0:
++                        log.info(f"Child process (PID: {proc.pid}) exited cleanly (expected for daemon mode and PyInstaller bootstrap).")
++                    else:
++                        log.error(f"Child process (PID: {proc.pid}) exited prematurely with code: {proc.returncode}")
++                        log.info("Child ENV MPP_SOLAR_SPAWNED = %s", os.environ.get("MPP_SOLAR_SPAWNED"))
++                        log.info("Child ENV MPP_SOLAR_PERMANENT_DIR = %s", os.environ.get("MPP_SOLAR_PERMANENT_DIR"))
++                    cleanup_permanent_directory(permanent_dir)
++                    return True
++                time.sleep(0.5)
++
++            log.info(f"Child process started successfully with PID: {proc.pid}. Parent exiting.")
++            return True
++            
++        except Exception as e:
++            log.critical(f"Failed to spawn subprocess: {e}", exc_info=True)
++            cleanup_permanent_directory(permanent_dir)
++            return False
++
++    return False
++
++
++def setup_spawned_environment():
++    """
++    Set up environment for spawned process to use permanent directory
++    """
++    _log_runtime_context("PR_SPAWNED_CHILD_SETUP_ENTRY", log.debug)
++    if has_been_spawned() and is_pyinstaller_bundle():
++        permanent_dir = os.environ.get("MPP_SOLAR_PERMANENT_DIR")
++        if permanent_dir and os.path.exists(permanent_dir):
++            setup_permanent_environment(permanent_dir)
++            _log_runtime_context("PR_SPAWNED_CHILD_SETUP_COMPLETE", log.info)
++
++            # Log information about cleaned PID files
++            cleaned_files = os.environ.get("MPP_SOLAR_CLEANED_PID_FILES", "")
++            if cleaned_files:
++                log.info(f"Bootstrap process cleaned up PID files: {cleaned_files}")
++
++            return True
++        else:
++            _log_runtime_context("PR_SPAWNED_CHILD_SETUP_EXIT - Spawned process but permanent directory not found: {permanent_dir}. Continuing without explicit permanent environment setup.", log.warning)
++    return False
++
++import os
++import logging
++log = logging.getLogger(__name__)
++
++def is_stale_pyinstaller_pid(check_func_bundle, check_func_spawned):
++    """
++    Check if the PID file contains a stale PyInstaller bootstrap process PID
++    :param check_func_bundle: function that returns True if PyInstaller bundle
++    :param check_func_spawned: function that returns True if PyInstaller has spawned
++    :return: bool
++    """
++    try:
++        return check_func_bundle() and check_func_spawned()
++    except Exception:
++        return False
++
++def handle_stale_pid(pid_file_path, check_bundle, check_spawned, check_existing):
++    """
++    Check for stale PID files and handle removal logic.
++    Returns True if it is safe to continue, or False if a daemon is already running or error occurs.
++    """
++    if is_stale_pyinstaller_pid(check_bundle, check_spawned):
++        log.info("Removing stale PyInstaller bootstrap PID file")
++        try:
++            os.remove(pid_file_path)
++        except Exception as e:
++            log.error(f"Failed to remove stale PID file: {e}")
++            return False
++    elif check_existing():
++        log.error("Another daemon instance is already running")
++        return False
++    else:
++        log.info("Removing stale PID file")
++        try:
++            os.remove(pid_file_path)
++        except Exception as e:
++            log.error(f"Failed to remove stale PID file: {e}")
++            return False
++    return True
+diff --git a/mppsolar/helpers.py b/mppsolar/helpers.py
+index 70a608a..747ef77 100644
+--- a/mppsolar/helpers.py
++++ b/mppsolar/helpers.py
+@@ -1,4 +1,6 @@
+ #!/usr/bin/env python3
++import os
++import sys
+ import logging
+ import importlib
+ 
+@@ -127,3 +129,7 @@ class CRC_XModem:
+     def crc_hex(self, data):
+         crc = self.compute_crc(data)
+         return format(crc, '04x').upper()
++
++
++
++
+diff --git a/mppsolar/main.py b/mppsolar/main.py
+index 57a0ea0..690f2ee 100644
+--- a/mppsolar/main.py
++++ b/mppsolar/main.py
+@@ -1,5 +1,6 @@
+ from mppsolar import main
+ 
+-
+ if __name__ == "__main__":
+     main()
++
++

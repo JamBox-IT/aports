@@ -3,7 +3,7 @@
 pkgname=py3-mppsolar
 _pkgreal=mpp-solar
 pkgver=0.16.55
-pkgrel=4
+pkgrel=5
 pkgdesc="Package to communicate with Solar inverters and BMSs"
 url="http://packages.python.org/pypi/mppsolar"
 arch="noarch"

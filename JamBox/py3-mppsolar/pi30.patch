@@ -1,0 +1,75 @@
+diff --git a/mppsolar/protocols/pi30.py b/mppsolar/protocols/pi30.py
+index 114bbb5..515479e 100644
+--- a/mppsolar/protocols/pi30.py
++++ b/mppsolar/protocols/pi30.py
+@@ -765,21 +765,21 @@ QUERY_COMMANDS = {
+         "type": "QUERY",
+         "response_type": "SEQUENTIAL",
+         "response": [
+-            ["float", "AC Input Voltage", "V"],
+-            ["float", "AC Input Current", "A"],
+-            ["float", "AC Output Voltage", "V"],
+-            ["float", "AC Output Frequency", "Hz"],
+-            ["float", "AC Output Current", "A"],
+-            ["int", "AC Output Apparent Power", "VA"],
+-            ["int", "AC Output Active Power", "W"],
+-            ["float", "Battery Voltage", "V"],
+-            ["float", "Battery Recharge Voltage", "V"],
+-            ["float", "Battery Under Voltage", "V"],
+-            ["float", "Battery Bulk Charge Voltage", "V"],
+-            ["float", "Battery Float Charge Voltage", "V"],
++            ["float", "Rated AC Input Voltage", "V"],
++            ["float", "Rated AC Input Current", "A"],
++            ["float", "Rated AC Output Voltage", "V"],
++            ["float", "Rated AC Output Frequency", "Hz"],
++            ["float", "Rated AC Output Current", "A"],
++            ["int", "Rated AC Output Apparent Power", "VA"],
++            ["int", "Rated AC Output Active Power", "W"],
++            ["float", "Rated Battery Voltage", "V"],
++            ["float", "Set Battery Recharge Voltage", "V"],
++            ["float", "Set Battery Under Voltage", "V"],
++            ["float", "Set Battery Bulk Charge Voltage", "V"],
++            ["float", "Set Battery Float Charge Voltage", "V"],
+             [
+                 "option",
+-                "Battery Type",
++                "Set Battery Type",
+                 [
+                     "AGM",
+                     "Flooded",
+@@ -793,17 +793,17 @@ QUERY_COMMANDS = {
+                     "3rd party Lithium",
+                 ],
+             ],
+-            ["int", "Max AC Charging Current", "A"],
+-            ["int", "Max Charging Current", "A"],
+-            ["option", "Input Voltage Range", ["Appliance", "UPS"]],
++            ["int", "Set Max AC Charging Current", "A"],
++            ["int", "Set Max Charging Current", "A"],
++            ["option", "Set Input Voltage Range", ["Appliance", "UPS"]],
+             [
+                 "option",
+-                "Output Source Priority",
++                "Set Output Source Priority",
+                 ["Utility first", "Solar first", "SBU first"],
+             ],
+             [
+                 "option",
+-                "Charger Source Priority",
++                "Set Charger Source Priority",
+                 [
+                     "Utility first",
+                     "Solar first",
+@@ -811,10 +811,10 @@ QUERY_COMMANDS = {
+                     "Only solar charging permitted",
+                 ],
+             ],
+-            ["int", "Max Parallel Units", "units"],
++            ["int", "Rated Max Parallel Units", "units"],
+             [
+                 "str_keyed",
+-                "Machine Type",
++                "Set Machine Type",
+                 {"00": "Grid tie", "01": "Off Grid", "10": "Hybrid"},
+             ],
+             ["option", "Topology", ["transformerless", "transformer"]],
