@@ -35,6 +35,13 @@ jobs:
       - name: Configure Build Environment
         shell: alpine.sh {0}
         run: |
+          # Add current user to abuild group
+          sudo addgroup $(whoami) abuild
+
+          # Fix permissions for abuild
+          sudo chgrp abuild /var/cache/distfiles
+          sudo chmod g+w /var/cache/distfiles
+
           # Create build directories
           mkdir -p ~/.abuild /var/cache/distfiles /tmp/packages
 
