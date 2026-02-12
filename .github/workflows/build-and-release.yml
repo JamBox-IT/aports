@@ -84,18 +84,23 @@ jobs:
           extra-repositories: https://dl-cdn.alpinelinux.org/alpine/latest-stable/community
           packages: alpine-sdk abuild apk-tools
 
+      - name: Setup abuild user and permissions
+        shell: alpine.sh --root {0}
+        run: |
+          # Ensure abuild group exists
+          addgroup abuild 2>/dev/null || true
+
+          # Add runner user to abuild group
+          adduser runner abuild 2>/dev/null || true
+
+          # Fix permissions for build directories
+          chown -R runner:abuild /var/cache/distfiles
+          chmod -R 775 /var/cache/distfiles
+
       - name: Configure abuild
         shell: alpine.sh {0}
         run: |
-          # Add current user to abuild group
-          sudo addgroup $(whoami) abuild
-
-          # Fix permissions for abuild
-          sudo chgrp abuild /var/cache/distfiles
-          sudo chmod g+w /var/cache/distfiles
-
           # Create build directories
-          mkdir -p /var/cache/distfiles
           mkdir -p ~/.abuild
 
           # Set architecture

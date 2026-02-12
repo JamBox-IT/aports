@@ -32,16 +32,22 @@ jobs:
           branch: latest-stable
           packages: alpine-sdk abuild apk-tools
 
+      - name: Setup abuild permissions
+        shell: alpine.sh --root {0}
+        run: |
+          # Ensure abuild group exists
+          addgroup abuild 2>/dev/null || true
+
+          # Add runner user to abuild group
+          adduser runner abuild 2>/dev/null || true
+
+          # Fix permissions for build directories
+          chown -R runner:abuild /var/cache/distfiles
+          chmod -R 775 /var/cache/distfiles
+
       - name: Configure Build Environment
         shell: alpine.sh {0}
         run: |
-          # Add current user to abuild group
-          sudo addgroup $(whoami) abuild
-
-          # Fix permissions for abuild
-          sudo chgrp abuild /var/cache/distfiles
-          sudo chmod g+w /var/cache/distfiles
-
           # Create build directories
           mkdir -p ~/.abuild /var/cache/distfiles /tmp/packages
 
