@@ -1,7 +1,7 @@
 # Maintainer: Corey De Lasaux <cordelster@gmail.com>
 pkgname=jambox-keys
 pkgver=0.1
-pkgrel=4
+pkgrel=5
 pkgdesc="Public keys for JamBox Alpine Linux packages"
 url="https://alpinelinux.org"
 # we install arch specific keys to /etc so we cannot do arch=noarch
