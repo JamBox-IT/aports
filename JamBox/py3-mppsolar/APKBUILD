@@ -1,17 +1,19 @@
 # Contributor: Corey DeLasaux <cordelster@gmail.com>
 # Maintainer: Corey DeLasaux <cordelster@gmail.com>
 pkgname=py3-mppsolar
-_pkgreal=mppsolar
-pkgver=0.16.29
-pkgrel=0
+_pkgreal=mpp-solar
+pkgver=0.16.55
+pkgrel=3
 pkgdesc="Package to communicate with Solar inverters and BMSs"
 url="http://packages.python.org/pypi/mppsolar"
 arch="noarch"
 license="MIT"
-depends="python3 py3-paho-mqtt py3-pyserial py3-packaging py3-pydantic py3-parsing py3-yaml py3-typing-extensions py3-strenum py3-mongo"
-checkdepends="python3-dev"
-makedepends="py3-setuptools py3-gpep517 py3-wheel python3-dev poetry py3-paho-mqtt py3-pip"
-source="https://files.pythonhosted.org/packages/96/8a/93c950c2250f376eb9d258aa9bb84b32f3bf676ec35f50f2722ce656fa76/mppsolar-0.16.29.tar.gz"
+depends="python3 py3-paho-mqtt py3-pyserial py3-packaging py3-pydantic py3-parsing py3-yaml py3-typing-extensions py3-strenum py3-mongo py3-pymodbus py3-requests py3-psycopg2 py3-psutil"
+checkdepends="python3-dev pytest"
+makedepends="py3-setuptools py3-gpep517 py3-wheel python3-dev poetry py3-paho-mqtt py3-pip py3-psycopg2"
+#source="https://files.pythonhosted.org/packages/96/8a/93c950c2250f376eb9d258aa9bb84b32f3bf676ec35f50f2722ce656fa76/mppsolar-0.16.29.tar.gz"
+source="$_pkgreal-$pkgver.tar.gz::https://github.com/jblance/mpp-solar/archive/refs/tags/$pkgver.tar.gz
+        preversion.patch"
 builddir="$srcdir/$_pkgreal-$pkgver"
 options="!check"
 
@@ -28,10 +30,12 @@ check() {
 }
 
 package() {
-	python3 -m installer -d "$pkgdir" \
+#	python3 -m installer -d "$pkgdir" \
+	gpep517 install-wheel --destdir "$pkgdir" \
 		.dist/*.whl
 }
 
 sha512sums="
-88b41ff31e7bd603c0a8154e518588ea9240b3be22391ffa63a73b7dd61ab8f224029e38ffd426203d91ac4fe19102d678dc392b7f2f5778939245512ef4a641  mppsolar-0.16.29.tar.gz
+07e71e14fff4536fdab4949ee36907573b3967e069ffd9d9ce5d6abaf616bbab523e7c75a82c26355c910d2f64714e3fbda73a777634997b2dca14a74cb2a71a  mpp-solar-0.16.55.tar.gz
+e5b9d4cb6266d12dd13434689a691df92039a57bc76bd9b55bedbf1a228abd205d17bc20b82919c6a9b485f81118fa8e7634e9367263a49f3d8b82b55821f8f8  preversion.patch
 "
