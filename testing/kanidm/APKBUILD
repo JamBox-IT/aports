@@ -149,7 +149,8 @@ ldap_sync() {
 radiusd() {
 	pkgdesc="Kanidm FreeRADIUS integration module"
 	depends="python3 freeradius freeradius-python $pkgname-clients"
-
+  arch="noarch"
+  
 	# Install the Python RADIUS module
 	install -Dm644 "$builddir"/rlm_python/mods-available/python3 "$subpkgdir"/etc/raddb/mods-available/kanidm
 	install -Dm644 "$builddir"/rlm_python/sites-available/default "$subpkgdir"/etc/raddb/sites-available/kanidm-default
@@ -159,6 +160,7 @@ radiusd() {
 rlm_python() {
 	pkgdesc="Kanidm python module"
 	depends="python3 $pkgname-clients"
+	arch="noarch"
 	
 	# Copy Python module files
 	install -dm755 "$subpkgdir"/usr/lib/kanidm/radius/
