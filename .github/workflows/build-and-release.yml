@@ -322,4 +322,4 @@ jobs:
           publish_dir: ./alpine-repo
           publish_branch: gh-pages
           keep_files: true
-          destination_dir: .
+          # Don't set destination_dir - let it preserve the alpine-repo structure
