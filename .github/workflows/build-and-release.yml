@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - 'v*'  # Match v3.19, v3.20, etc. (Alpine standard)
     # Only trigger on actual package changes
     paths:
       - 'JamBox/*/APKBUILD'
@@ -286,40 +287,43 @@ jobs:
           docker run --rm -v "$PWD:/work" -w /work alpine:latest sh -c '
             apk add --no-cache abuild
 
-            # Determine Alpine version based on branch
+            # Use branch name directly (main->edge, v3.19->v3.19)
             BRANCH="${GITHUB_REF#refs/heads/}"
-            if [ "$BRANCH" = "main" ]; then
-              ALPINE_VERSION="edge"
-            else
-              ALPINE_VERSION="$BRANCH"
-            fi
+            [ "$BRANCH" = "main" ] && BRANCH="edge"
 
-            echo "Building for Alpine version: $ALPINE_VERSION"
+            echo "Building for Alpine version: $BRANCH"
 
-            # Create repository directory structure: /edge/JamBox/ or /v3.19/JamBox/
-            mkdir -p alpine-repo/${ALPINE_VERSION}/JamBox
+            # Create repository directory structure: edge/JamBox/ or v3.19/JamBox/
+            mkdir -p ${BRANCH}/JamBox
 
             # Organize packages by architecture with APKINDEX
             for arch in x86_64 aarch64 armv7 armhf; do
               if [ -d "packages" ] && ls packages/*-${arch}.apk 2>/dev/null; then
-                mkdir -p alpine-repo/${ALPINE_VERSION}/JamBox/${arch}
-                cp packages/*-${arch}.apk alpine-repo/${ALPINE_VERSION}/JamBox/${arch}/ || true
+                mkdir -p ${BRANCH}/JamBox/${arch}
+                cp packages/*-${arch}.apk ${BRANCH}/JamBox/${arch}/ || true
 
                 # Create APKINDEX
-                cd alpine-repo/${ALPINE_VERSION}/JamBox/${arch}
+                cd ${BRANCH}/JamBox/${arch}
                 apk index -o APKINDEX.tar.gz *.apk
                 cd /work
               fi
             done
 
-            ls -laR alpine-repo/
+            ls -laR ${BRANCH}/
           '
+
+      - name: Determine Alpine version for publishing
+        id: alpine-version
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          [ "$BRANCH" = "main" ] && BRANCH="edge"
+          echo "version=$BRANCH" >> $GITHUB_OUTPUT
 
       - name: Publish to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./alpine-repo
+          publish_dir: ./${{ steps.alpine-version.outputs.version }}
           publish_branch: gh-pages
           keep_files: true
-          # Don't set destination_dir - let it preserve the alpine-repo structure
+          destination_dir: ${{ steps.alpine-version.outputs.version }}
