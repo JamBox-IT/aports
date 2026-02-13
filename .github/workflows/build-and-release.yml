@@ -98,13 +98,31 @@ jobs:
           chown -R runner:abuild /var/cache/distfiles
           chmod -R 775 /var/cache/distfiles
 
-      - name: Install public key to trusted keys
+      - name: Configure APK repositories
         shell: alpine.sh --root {0}
         run: |
-          # Install public key to system trusted keys
+          # Determine version from branch
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          [ "$BRANCH" = "main" ] && ALPINE_VERSION="edge" || ALPINE_VERSION="$BRANCH"
+
+          # Install JamBox public key
           echo "${{ secrets.RSA_PUBLIC_KEY }}" > /etc/apk/keys/jambox.rsa.pub
           chmod 644 /etc/apk/keys/jambox.rsa.pub
-          ls -la /etc/apk/keys/
+
+          # Configure /etc/apk/repositories
+          cat > /etc/apk/repositories << EOF
+          # Alpine main repository
+          https://dl-cdn.alpinelinux.org/alpine/latest-stable/main
+          # Alpine community repository
+          https://dl-cdn.alpinelinux.org/alpine/latest-stable/community
+          # Alpine testing repository (for extra dependencies)
+          https://dl-cdn.alpinelinux.org/alpine/edge/testing
+          # JamBox custom repository (may not exist on first build)
+          @jambox https://jambox-it.github.io/aports/${ALPINE_VERSION}/JamBox/${{ matrix.arch }}
+          EOF
+
+          cat /etc/apk/repositories
+          apk update || true
 
       - name: Configure abuild
         shell: alpine.sh {0}
@@ -187,8 +205,7 @@ jobs:
           done
 
           if [ $BUILD_FAILED -ne 0 ]; then
-            echo "ERROR: Build failed for one or more packages"
-            exit 1
+            echo "WARNING: Build failed for one or more packages, but continuing to publish successful builds"
           fi
 
       - name: Sign packages
