@@ -282,37 +282,38 @@ jobs:
 
       - name: Create Alpine repository structure
         run: |
-          # Install apk-tools for creating APKINDEX
-          sudo apt-get update && sudo apt-get install -y alpine-sdk
+          # Use Alpine container to create APKINDEX (apk-tools not in Ubuntu repos)
+          docker run --rm -v "$PWD:/work" -w /work alpine:latest sh -c '
+            apk add --no-cache abuild
 
-          # Determine Alpine version based on branch
-          BRANCH="${GITHUB_REF#refs/heads/}"
-          if [ "$BRANCH" = "main" ]; then
-            ALPINE_VERSION="edge"
-          else
-            ALPINE_VERSION="$BRANCH"  # e.g., 3.19-stable, 3.18-stable
-          fi
-
-          echo "Building for Alpine version: $ALPINE_VERSION"
-
-          # Create repository directory structure: /edge/JamBox/ or /v3.19/JamBox/
-          mkdir -p alpine-repo/${ALPINE_VERSION}/JamBox
-
-          # Organize packages by architecture with APKINDEX
-          for arch in x86_64 aarch64 armv7 armhf; do
-            if [ -d "packages" ] && ls packages/*-${arch}.apk 2>/dev/null; then
-              mkdir -p alpine-repo/${ALPINE_VERSION}/JamBox/${arch}
-              cp packages/*-${arch}.apk alpine-repo/${ALPINE_VERSION}/JamBox/${arch}/ || true
-
-              # Create APKINDEX
-              cd alpine-repo/${ALPINE_VERSION}/JamBox/${arch}
-              apk index -o APKINDEX.tar.gz *.apk
-              abuild-sign -k ~/.abuild/*.rsa APKINDEX.tar.gz || echo "Signing skipped"
-              cd ../../../..
+            # Determine Alpine version based on branch
+            BRANCH="${GITHUB_REF#refs/heads/}"
+            if [ "$BRANCH" = "main" ]; then
+              ALPINE_VERSION="edge"
+            else
+              ALPINE_VERSION="$BRANCH"
             fi
-          done
 
-          ls -laR alpine-repo/
+            echo "Building for Alpine version: $ALPINE_VERSION"
+
+            # Create repository directory structure: /edge/JamBox/ or /v3.19/JamBox/
+            mkdir -p alpine-repo/${ALPINE_VERSION}/JamBox
+
+            # Organize packages by architecture with APKINDEX
+            for arch in x86_64 aarch64 armv7 armhf; do
+              if [ -d "packages" ] && ls packages/*-${arch}.apk 2>/dev/null; then
+                mkdir -p alpine-repo/${ALPINE_VERSION}/JamBox/${arch}
+                cp packages/*-${arch}.apk alpine-repo/${ALPINE_VERSION}/JamBox/${arch}/ || true
+
+                # Create APKINDEX
+                cd alpine-repo/${ALPINE_VERSION}/JamBox/${arch}
+                apk index -o APKINDEX.tar.gz *.apk
+                cd /work
+              fi
+            done
+
+            ls -laR alpine-repo/
+          '
 
       - name: Publish to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
