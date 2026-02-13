@@ -1,0 +1,166 @@
+name: Publish Alpine Repository
+
+on:
+  workflow_call:
+    inputs:
+      alpine-version:
+        description: 'Alpine version (edge, v3.19, v3.20, etc.)'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      alpine-version:
+        description: 'Alpine version to rebuild'
+        required: true
+        type: choice
+        options:
+          - edge
+          - v3.21
+          - v3.20
+          - v3.19
+          - v3.18
+
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  publish-repository:
+    name: Publish Alpine Repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts (if called from build workflow)
+        if: github.event_name == 'workflow_call'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          path: new-packages
+
+      - name: Organize new packages by architecture
+        if: github.event_name == 'workflow_call'
+        run: |
+          mkdir -p packages
+          for arch_dir in new-packages/packages-*/; do
+            if [ -d "$arch_dir" ]; then
+              arch=$(basename "$arch_dir" | sed 's/packages-//')
+              mkdir -p "packages/${arch}"
+              cp "$arch_dir"*.apk "packages/${arch}/" 2>/dev/null || true
+            fi
+          done
+          ls -la packages/*/
+
+      - name: Download existing repository from GitHub Pages
+        run: |
+          BRANCH="${{ inputs.alpine-version }}"
+          mkdir -p "${BRANCH}/JamBox"
+
+          echo "Fetching existing repository for ${BRANCH}..."
+
+          # Download existing packages from gh-pages if they exist
+          for arch in x86_64 aarch64 armv7 armhf; do
+            mkdir -p "${BRANCH}/JamBox/${arch}"
+            echo "Checking for existing ${arch} packages..."
+
+            # Try to download existing packages (will fail on first run, that's ok)
+            wget -q -r -np -nH -R "index.html*" \
+              --cut-dirs=2 \
+              -P "${BRANCH}/JamBox/${arch}/" \
+              "https://jambox-it.github.io/aports/${BRANCH}/JamBox/${arch}/" \
+              2>/dev/null || echo "No existing packages found for ${arch} (normal for first build)"
+
+            # Count existing packages
+            EXISTING=$(find "${BRANCH}/JamBox/${arch}" -name "*.apk" 2>/dev/null | wc -l)
+            echo "Found ${EXISTING} existing packages for ${arch}"
+          done
+
+      - name: Merge and index packages
+        run: |
+          BRANCH="${{ inputs.alpine-version }}"
+          echo "Building repository for Alpine version: ${BRANCH}"
+
+          # Use Alpine container to create APKINDEX (apk-tools not in Ubuntu repos)
+          docker run --rm \
+            -v "$PWD/packages:/new-packages:ro" \
+            -v "$PWD/${BRANCH}:/repo" \
+            -w /repo \
+            alpine:latest sh -c '
+            apk add --no-cache abuild
+
+            echo "=== Merging new packages with existing repository ==="
+
+            # Process each architecture
+            for arch in x86_64 aarch64 armv7 armhf; do
+              mkdir -p JamBox/${arch}
+
+              BEFORE=$(ls -1 JamBox/${arch}/*.apk 2>/dev/null | wc -l)
+
+              # Copy new packages (overwrites old versions with same name)
+              if [ -d "/new-packages/${arch}" ] && ls /new-packages/${arch}/*.apk 2>/dev/null | head -1 >/dev/null; then
+                echo "Adding new packages for ${arch}..."
+                cp /new-packages/${arch}/*.apk JamBox/${arch}/
+                AFTER=$(ls -1 JamBox/${arch}/*.apk 2>/dev/null | wc -l)
+                NEW=$((AFTER - BEFORE))
+                echo "  Added/updated ${NEW} packages"
+              else
+                AFTER=$BEFORE
+                echo "  No new packages for ${arch}"
+              fi
+
+              # Regenerate APKINDEX with ALL packages
+              cd JamBox/${arch}
+              if [ $AFTER -gt 0 ]; then
+                echo "  Generating APKINDEX for ${AFTER} total packages..."
+                apk index -o APKINDEX.tar.gz *.apk
+                echo "  ✓ APKINDEX created for ${arch}"
+              else
+                echo "  ✗ No packages for ${arch}"
+              fi
+              cd /repo
+
+              echo ""
+            done
+
+            echo "=== Repository Summary ==="
+            for arch in x86_64 aarch64 armv7 armhf; do
+              COUNT=$(ls -1 JamBox/${arch}/*.apk 2>/dev/null | wc -l)
+              echo "${arch}: ${COUNT} packages"
+            done
+          '
+
+          echo ""
+          echo "Final repository structure for ${BRANCH}:"
+          for arch in x86_64 aarch64 armv7 armhf; do
+            COUNT=$(find "${BRANCH}/JamBox/${arch}" -name "*.apk" 2>/dev/null | wc -l)
+            echo "  ${arch}: ${COUNT} packages"
+          done
+
+      - name: Publish to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./${{ inputs.alpine-version }}
+          publish_branch: gh-pages
+          keep_files: true
+          destination_dir: ${{ inputs.alpine-version }}
+          enable_jekyll: false
+          cname: false
+
+      - name: Generate repository URL
+        run: |
+          BRANCH="${{ inputs.alpine-version }}"
+          echo ""
+          echo "=========================================="
+          echo "Alpine Repository Published!"
+          echo "=========================================="
+          echo ""
+          echo "Add to /etc/apk/repositories:"
+          echo ""
+          for arch in x86_64 aarch64 armv7 armhf; do
+            echo "  # ${arch}"
+            echo "  @jambox https://jambox-it.github.io/aports/${BRANCH}/JamBox/${arch}"
+            echo ""
+          done
+          echo "Install packages with:"
+          echo "  apk add package-name@jambox"
