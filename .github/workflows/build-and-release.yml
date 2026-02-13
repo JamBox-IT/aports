@@ -316,14 +316,17 @@ jobs:
 
             # Organize packages by architecture with APKINDEX
             for arch in x86_64 aarch64 armv7 armhf; do
-              if [ -d "packages" ] && ls packages/*-${arch}.apk 2>/dev/null; then
+              if [ -d "packages/${arch}" ] && ls packages/${arch}/*.apk 2>/dev/null; then
+                echo "Processing packages for ${arch}..."
                 mkdir -p ${BRANCH}/JamBox/${arch}
-                cp packages/*-${arch}.apk ${BRANCH}/JamBox/${arch}/ || true
+                cp packages/${arch}/*.apk ${BRANCH}/JamBox/${arch}/
 
                 # Create APKINDEX
                 cd ${BRANCH}/JamBox/${arch}
                 apk index -o APKINDEX.tar.gz *.apk
                 cd /work
+              else
+                echo "No packages found for ${arch}"
               fi
             done
 
