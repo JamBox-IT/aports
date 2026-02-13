@@ -304,62 +304,13 @@ jobs:
           path: packages/
           retention-days: 90
 
-      - name: Create Alpine repository structure
-        run: |
-          # Determine Alpine version from branch
-          BRANCH="${GITHUB_REF#refs/heads/}"
-          [ "$BRANCH" = "main" ] && BRANCH="edge"
-          echo "Building repository for Alpine version: $BRANCH"
-
-          # Create repository directory structure: edge/JamBox/ or v3.19/JamBox/
-          mkdir -p "${BRANCH}/JamBox"
-
-          # Use Alpine container to create APKINDEX (apk-tools not in Ubuntu repos)
-          docker run --rm \
-            -v "$PWD/packages:/packages:ro" \
-            -v "$PWD/${BRANCH}:/output" \
-            -w /output \
-            alpine:latest sh -c '
-            apk add --no-cache abuild
-
-            # Organize packages by architecture with APKINDEX
-            for arch in x86_64 aarch64 armv7 armhf; do
-              if [ -d "/packages/${arch}" ] && ls /packages/${arch}/*.apk 2>/dev/null | head -1 >/dev/null; then
-                echo "Processing packages for ${arch}..."
-                mkdir -p JamBox/${arch}
-                cp /packages/${arch}/*.apk JamBox/${arch}/
-
-                # Create APKINDEX
-                cd JamBox/${arch}
-                apk index -o APKINDEX.tar.gz *.apk
-                echo "Created APKINDEX for ${arch} with $(ls -1 *.apk | wc -l) packages"
-                cd /output
-              else
-                echo "No packages found for ${arch}"
-              fi
-            done
-
-            echo "Repository structure:"
-            find JamBox -type f -name "*.apk" -o -name "APKINDEX.tar.gz"
-          '
-
-          echo "Final repository structure for ${BRANCH}:"
-          ls -la "${BRANCH}/JamBox/"*/
-
-      - name: Determine Alpine version for publishing
-        id: alpine-version
-        run: |
-          BRANCH="${GITHUB_REF#refs/heads/}"
-          [ "$BRANCH" = "main" ] && BRANCH="edge"
-          echo "version=$BRANCH" >> $GITHUB_OUTPUT
-
-      - name: Publish to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./${{ steps.alpine-version.outputs.version }}
-          publish_branch: gh-pages
-          keep_files: true
-          destination_dir: ${{ steps.alpine-version.outputs.version }}
-          enable_jekyll: false  # Disable Jekyll processing
-          cname: false  # Don't use custom domain
+  publish-repository:
+    name: Publish to Alpine Repository
+    needs: [detect-changes, create-release]
+    if: needs.detect-changes.outputs.has-changes == 'true' && !cancelled()
+    uses: ./.github/workflows/publish-repository.yml
+    permissions:
+      contents: write
+      pages: write
+    with:
+      alpine-version: ${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}
