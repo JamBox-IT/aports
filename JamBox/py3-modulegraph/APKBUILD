@@ -4,7 +4,7 @@
 pkgname=py3-modulegraph
 _pkgreal=modulegraph
 pkgver=0.19.6
-pkgrel=0
+pkgrel=1
 pkgdesc="Python module dependency analysis tool"
 url="http://packages.python.org/pypi/modulegraph"
 arch="noarch"
