@@ -1,0 +1,225 @@
+name: Validate Packages
+
+# This workflow validates APKBUILD files for syntax errors and best practices
+# It runs on every pull request and push to catch issues early
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'JamBox/*/APKBUILD'
+      - 'testing/*/APKBUILD'
+      - '**/*.patch'
+  pull_request:
+    paths:
+      - 'JamBox/*/APKBUILD'
+      - 'testing/*/APKBUILD'
+      - '**/*.patch'
+
+jobs:
+  validate:
+    name: Validate APKBUILD Files
+    runs-on: ubuntu-latest
+    container:
+      image: alpine:edge
+      options: --user root
+
+    steps:
+      - name: Install git and basic tools
+        run: |
+          apk add --no-cache git bash
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install validation tools
+        run: |
+          apk add --no-cache \
+            alpine-sdk \
+            abuild \
+            bash
+
+      - name: Detect changed APKBUILD files
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+
+          # Handle first commit case
+          if [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "First commit - checking all APKBUILD files"
+            CHANGED_FILES=$(find . -name APKBUILD -path './JamBox/*' -o -name APKBUILD -path './testing/*')
+          else
+            CHANGED_FILES=$(git diff --name-only $BASE_SHA..$HEAD_SHA | grep -E 'APKBUILD$' || true)
+          fi
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "No APKBUILD files changed"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Changed APKBUILD files:"
+          echo "$CHANGED_FILES"
+          echo "$CHANGED_FILES" > /tmp/changed_apkbuilds.txt
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+
+      - name: Validate APKBUILD syntax
+        if: steps.changes.outputs.has_changes == 'true'
+        run: |
+          FAILED=0
+
+          while IFS= read -r APKBUILD; do
+            if [ -z "$APKBUILD" ]; then
+              continue
+            fi
+
+            echo "===================================="
+            echo "Validating: $APKBUILD"
+            echo "===================================="
+
+            if [ ! -f "$APKBUILD" ]; then
+              echo "❌ File not found: $APKBUILD"
+              FAILED=1
+              continue
+            fi
+
+            # Check shell syntax
+            if ! bash -n "$APKBUILD"; then
+              echo "❌ Syntax error in APKBUILD"
+              FAILED=1
+              continue
+            fi
+
+            # Source and check required variables
+            (
+              cd "$(dirname "$APKBUILD")"
+              . ./APKBUILD
+
+              if [ -z "$pkgname" ]; then
+                echo "❌ Missing pkgname"
+                exit 1
+              fi
+
+              if [ -z "$pkgver" ]; then
+                echo "❌ Missing pkgver"
+                exit 1
+              fi
+
+              if [ -z "$pkgrel" ]; then
+                echo "❌ Missing pkgrel"
+                exit 1
+              fi
+
+              echo "✅ APKBUILD syntax valid"
+              echo "   Package: $pkgname"
+              echo "   Version: $pkgver-r$pkgrel"
+            ) || FAILED=1
+
+          done < /tmp/changed_apkbuilds.txt
+
+          if [ $FAILED -ne 0 ]; then
+            echo ""
+            echo "❌ Validation failed for one or more APKBUILD files"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ All APKBUILD files validated successfully"
+
+      - name: Check for security issues
+        if: steps.changes.outputs.has_changes == 'true'
+        run: |
+          WARNINGS=0
+
+          while IFS= read -r APKBUILD; do
+            if [ -z "$APKBUILD" ]; then
+              continue
+            fi
+
+            echo "Security check: $APKBUILD"
+
+            # Check for HTTP URLs (should use HTTPS)
+            if grep -q 'source=.*http://' "$APKBUILD"; then
+              echo "⚠️  Warning: HTTP URL found in source - consider using HTTPS"
+              WARNINGS=$((WARNINGS + 1))
+            fi
+
+            # Check for checksums
+            if ! grep -q 'sha512sums=' "$APKBUILD" && ! grep -q 'sha256sums=' "$APKBUILD"; then
+              echo "⚠️  Warning: No checksums found"
+              WARNINGS=$((WARNINGS + 1))
+            fi
+
+          done < /tmp/changed_apkbuilds.txt
+
+          if [ $WARNINGS -gt 0 ]; then
+            echo ""
+            echo "⚠️  Found $WARNINGS security warnings (non-blocking)"
+          else
+            echo "✅ No security issues detected"
+          fi
+
+      - name: Check package metadata
+        if: steps.changes.outputs.has_changes == 'true'
+        run: |
+          while IFS= read -r APKBUILD; do
+            if [ -z "$APKBUILD" ]; then
+              continue
+            fi
+
+            echo "Checking metadata: $APKBUILD"
+
+            # Check for maintainer
+            if ! grep -q '# Maintainer:' "$APKBUILD"; then
+              echo "⚠️  Warning: Missing maintainer information"
+            fi
+
+            # Source and check metadata
+            (
+              cd "$(dirname "$APKBUILD")"
+              . ./APKBUILD
+
+              if [ -z "$pkgdesc" ]; then
+                echo "⚠️  Warning: Missing package description"
+              fi
+
+              if [ -z "$url" ]; then
+                echo "⚠️  Warning: Missing project URL"
+              fi
+
+              if [ -z "$license" ]; then
+                echo "⚠️  Warning: Missing license information"
+              fi
+
+              echo "✅ Metadata check complete"
+            )
+
+          done < /tmp/changed_apkbuilds.txt
+
+      - name: Generate validation summary
+        if: always()
+        run: |
+          echo "## Validation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f /tmp/changed_apkbuilds.txt ]; then
+            echo "### Validated Files" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            while IFS= read -r APKBUILD; do
+              if [ -n "$APKBUILD" ]; then
+                echo "- $APKBUILD" >> $GITHUB_STEP_SUMMARY
+              fi
+            done < /tmp/changed_apkbuilds.txt
+          else
+            echo "No APKBUILD files changed" >> $GITHUB_STEP_SUMMARY
+          fi

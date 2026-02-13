@@ -9,8 +9,8 @@ hiddenimports += collect_submodules('mppsolar')
 
 
 a = Analysis(
-    ['/usr/bin/mpp-solar'],
-    pathex=[],
+    ['/usr/lib/python3.11/site-packages/mppsolar/main.py'],
+    pathex=['/usr/lib/python3.11/site-packages/mppsolar'],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
@@ -20,7 +20,7 @@ a = Analysis(
     excludes=[],
     noarchive=False,
 )
-pyz = PYZ(a.pure)
+pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 
 exe = EXE(
     pyz,
@@ -34,7 +34,7 @@ exe = EXE(
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=None,
+    runtime_tmpdir='/var/tmp',
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,

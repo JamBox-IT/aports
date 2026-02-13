@@ -1,0 +1,4241 @@
+diff --git a/docs/configfile.md b/docs/configfile.md
+index 9594661..8798c07 100644
+--- a/docs/configfile.md
++++ b/docs/configfile.md
+@@ -11,6 +11,7 @@
+ pause=5
+ 
+ # ipaddress or hostname of the mqtt broker, default is 'localhost'
++# See mqtt documentation for all the options available
+ mqtt_broker=localhost
+ 
+ # mqtt broker port number, default is 1883
+@@ -20,6 +21,9 @@ mqtt_port=1883
+ mqtt_user=username
+ mqtt_pass=password
+ 
++# Daemon log file path and name can be configured, defaults to /var/log/mpp-solar.log
++log_file = /custom/path/to/mpp-solar.log
++ 
+ ### The section name needs to be unique
+ ### There can be multiple sections which are processed sequentially without pause
+ ### The pause occurs after all sections are processed, before the next loop
+diff --git a/docs/daemon.md b/docs/daemon.md
+new file mode 100644
+index 0000000..3a697e1
+--- /dev/null
++++ b/docs/daemon.md
+@@ -0,0 +1,125 @@
++# MPP-Solar Daemon with Configurable PID File
++
++## Usage Examples
++
++### Basic daemon operation (uses default PID file location):
++```bash
++# Start daemon
++mpp-solar --daemon -C /etc/mpp-solar/mpp-solar.conf
++
++# Stop daemon
++mpp-solar --daemon-stop
++```
++
++### Custom PID file location and naming:
++```bash
++# Start daemon with custom PID file
++mpp-solar --daemon --pidfile /home/user/solar/mpp-solar.pid -C /etc/mpp-solar/mpp-solar.conf
++
++# Stop daemon using custom PID file
++mpp-solar --daemon-stop --pidfile /home/user/solar/mpp-solar.pid
++```
++
++### For non-root users:
++```bash
++# Start daemon (automatically uses /tmp or XDG_RUNTIME_DIR)
++mpp-solar --daemon --pidfile ~/.config/mpp-solar.pid -C ~/mpp-solar.conf
++
++# Stop daemon
++mpp-solar --daemon-stop --pidfile ~/.config/mpp-solar.pid
++```
++
++### For PyInstaller distributions:
++```bash
++# The daemon will automatically detect PyInstaller and use appropriate defaults
++./mpp-solar --daemon --pidfile ./mpp-solar.pid -C ./config/mpp-solar.conf
++
++# Stop PyInstaller daemon
++./mpp-solar --daemon-stop --pidfile ./mpp-solar.pid
++```
++
++### Docker containers:
++```bash
++# Use a mounted volume for persistent PID file
++docker run -v /host/path:/app/data your-mpp-solar-image \
++  --daemon --pidfile /app/data/mpp-solar.pid -C /app/config/mpp-solar.conf
++```
++
++## Default PID File Locations
++
++The daemon automatically chooses appropriate default locations:
++
++- **Root user**: `/var/run/mpp-solar.pid`
++- **Non-root user with XDG_RUNTIME_DIR**: `$XDG_RUNTIME_DIR/mpp-solar.pid`
++- **Non-root user without XDG_RUNTIME_DIR**: `/tmp/mpp-solar.pid`
++- **PyInstaller bundle**: `/tmp/mpp-solar.pid` (can be overridden)
++
++## Benefits of Configurable PID File
++
++1. **Multi-instance support**: Run multiple daemon instances with different configurations
++2. **Permission flexibility**: Use locations where the user has write access
++3. **Container-friendly**: Easy to mount volumes for persistent PID files
++4. **Development**: Use local directories during development/testing
++5. **System integration**: Integrate with existing system management tools
++
++## Advanced Examples
++
++### Multiple daemon instances:
++```bash
++# Start first instance for battery monitoring
++mpp-solar --daemon --pidfile /var/run/mpp-solar-battery.pid \
++  -C /etc/mpp-solar/battery.conf
++
++# Start second instance for inverter monitoring  
++mpp-solar --daemon --pidfile /var/run/mpp-solar-inverter.pid \
++  -C /etc/mpp-solar/inverter.conf
++```
++
++### Systemd service integration:
++```ini
++[Unit]
++Description=MPP Solar Monitor
++After=network.target
++
++[Service]
++Type=forking
++ExecStart=/usr/local/bin/mpp-solar --daemon --pidfile /var/run/mpp-solar.pid -C /etc/mpp-solar/mpp-solar.conf
++ExecStop=/usr/local/bin/mpp-solar --daemon-stop --pidfile /var/run/mpp-solar.pid
++PIDFile=/var/run/mpp-solar.pid
++Restart=always
++User=mpp-solar
++Group=mpp-solar
++
++[Install]
++WantedBy=multi-user.target
++```
++
++### OpenRC service integration:
++```bash
++#!/sbin/openrc-run
++
++name="MPP-Solar Daemon"
++command="/usr/bin/mpp-solar"
++command_args="-C /etc/mpp-solar/mpp-solar.conf --daemon"
++pidfile="/run/mpp-solar.pid"
++command_background="yes"
++
++supervisor="supervise-daemon"
++directory="/"
++respawn_delay=5
++respawn_max=0  # 0 means unlimited restarts
++output_log="/var/log/mpp-solar.log"
++error_log="/var/log/mpp-solar.err"
++
++depend() {
++    need localmount
++    after networking
++    use logger
++}
++
++start_pre() {
++    checkpath --directory --mode 0755 /run
++    checkpath --file --mode 0644 "$output_log"
++    checkpath --file --mode 0644 "$error_log"
++}
++```
+\ No newline at end of file
+diff --git a/docs/mqtt_configuration.md b/docs/mqtt_configuration.md
+new file mode 100644
+index 0000000..fd102cb
+--- /dev/null
++++ b/docs/mqtt_configuration.md
+@@ -0,0 +1,84 @@
++# MQTT Manager System
++
++## Overview
++
++The new MQTT system provides a threaded, centralized manager for all MQTT connections with support for bidirectional communication. Key features:
++
++- **Single connection per broker**: Multiple devices can share the same MQTT broker connection
++- **Bidirectional communication**: Devices can receive and respond(acknowledge) to commands via MQTT (json reponse).
++- **Thread-safe**: All operations are handled in separate threads with proper synchronization
++- **Automatic reconnection**: Built-in reconnection logic with exponential backoff
++- **Legacy compatibility**: Existing code continues to work without changes (WORK In PROGRESS)
++- **Proper qos levels**: Broker retention possible for commands if the sender set it, default for cmd_response. All outputs are still qos 0
++- **Broker retention ready**: automatically sends cmd_response with retention and qos 1, login with hostname plus a hash ID (using host, user, port)
++  to allow sending commands with qos 1/2 plus retention. Creates a readable client ID format: mppsolar_{hostname}_{hash}
++- **MQTT default wildcards**: are allowed.
++- **Allowed command list**: per device (regex supported).
++- Lagacy MQTT configuration in SETUP plus per device override (multiple broker support).
++
++
++## Configuration
++
++### MQTT Basic Setup Section
++You may  still setup mqtt options here, though any of the values per device will take precedence.
++```
++[SETUP]
++pause=10
++mqtt_broker=192.168.10.134
++mqtt_port=1883
++mqtt_user=mqttuser
++mqtt_pass=mqttpass
++```
++
++### Device Section with MQTT Commands
++```
++[Inverter_1]
++port=/dev/hidraw0
++protocol=PI30m045
++command=QPGS0#QPIGS
++outputs=hassd_mqtt2
++mqtt_allowed_cmds=POP0[0-2],PCP*,MCHGC{0-1}[0-6][0-2]
++# Optional: override broker settings for this device
++mqtt_broker=192.168.1.100
++mqtt_port=1884
++```
++
++## Command Structure
++
++### Command Topic Pattern where hostname is mpp-solars host (FQDN) short name.
++Commands are received on: `{hostname}/{device_name}/cmd`
++
++Example: `myserver/Inverter_1/cmd`
++
++### Response Topic Pattern
++Responses are sent on: `{hostname}/{device_name}/cmd_response`
++
++Example: `myserver/Inverter_1/cmd_response`
++
++### Command Format
++Send plain text commands to the command topic:
++```
++POP02
++```
++### MQTT wildcards are allowed for devices:
++MQTT supports two types of wildcards: + (single-level) and # (multi-level).
++
++### Response Format
++Responses are JSON formatted:
++```json
++{
++  "result": {
++    "_command": "POP02",
++     "_command_description": "Set Device Output Source Priority",
++      "raw_response": [
++        "(ACK9 \r",
++         ""
++      ],
++       "POP": [
++         "ACK",
++          ""
++        ]
++  },
++  "command": "POP02",
++  "timestamp": 1750305720.956817
++}
+\ No newline at end of file
+diff --git a/mppsolar/__init__.py b/mppsolar/__init__.py
+index d77a1c6..ed65b7a 100755
+--- a/mppsolar/__init__.py
++++ b/mppsolar/__init__.py
+@@ -1,15 +1,29 @@
+ # !/usr/bin/python3
++import os
+ import logging
+ import time
++import sys
+ from argparse import ArgumentParser
+ from platform import python_version
+ 
+ from mppsolar.version import __version__  # noqa: F401
+ 
+ from mppsolar.helpers import get_device_class
+-from mppsolar.daemon import get_daemon
++
++from mppsolar.daemon.pyinstaller_runtime import (
++    spawn_pyinstaller_subprocess,
++    is_pyinstaller_bundle,
++    has_been_spawned,
++    is_spawned_pyinstaller_process,
++  )
++from mppsolar.daemon import get_daemon, detect_daemon_type
+ from mppsolar.daemon import DaemonType
+-from mppsolar.libs.mqttbrokerc import MqttBroker
++from mppsolar.daemon.daemon import (
++    setup_daemon_logging,
++    daemonize,
++)
++from mppsolar.libs.mqttbroker_legacy import MqttBroker
++from mppsolar.libs.mqtt_manager import mqtt_manager
+ from mppsolar.outputs import get_outputs, list_outputs
+ from mppsolar.protocols import list_protocols
+ 
+@@ -19,6 +33,8 @@ FORMAT = "%(asctime)-15s:%(levelname)s:%(module)s:%(funcName)s@%(lineno)d: %(mes
+ logging.basicConfig(format=FORMAT)
+ 
+ 
++
++
+ def main():
+     description = f"Solar Device Command Utility, version: {__version__}, python version: {python_version()}"
+     parser = ArgumentParser(description=description)
+@@ -39,6 +55,11 @@ def main():
+         help="overrides the device communications port type",
+         default=None,
+     )
++    parser.add_argument(
++        "--dev",
++        help="Device identifier for prometheus output labeling for complex installations (default: None)",
++        default=None,
++    )
+     if parser.prog == "jkbms":
+         parser.add_argument(
+             "-P",
+@@ -192,6 +213,16 @@ def main():
+         action="store_true",
+         help="Enable Debug and above (i.e. all) messages",
+     )
++    parser.add_argument(
++        "--pidfile",
++        help="Specifies the PID file location for daemon mode (default: /var/run/mpp-solar.pid, /tmp/mpp-solar.pid for PyInstaller)",
++        default=None,
++    )
++    parser.add_argument(
++        "--daemon-stop", 
++        action="store_true", 
++        help="Stop a running daemon (requires --pidfile if using non-default location)"
++    )
+     parser.add_argument("-I", "--info", action="store_true", help="Enable Info and above level messages")
+ 
+     args = parser.parse_args()
+@@ -199,7 +230,8 @@ def main():
+     if prog_name is None:
+         prog_name = "mpp-solar"
+     s_prog_name = prog_name.replace("-", "")
+-    # log_name = s_prog_name.upper()
++    log_file_path = "/var/log/mpp-solar.log"
++
+ 
+     # logging (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+     # Turn on debug if needed
+@@ -210,7 +242,7 @@ def main():
+     else:
+         # set default log level
+         log.setLevel(logging.WARNING)
+-    logging.basicConfig()
++
+ 
+     # Display version if asked
+     log.info(description)
+@@ -218,6 +250,21 @@ def main():
+         print(description)
+         return None
+ 
++    def execute_device_command(device_name: str, command: str):
++        """Execute a command on a specific device and return results"""
++        log.info(f"Executing command '{command}' on device '{device_name}'")
++
++        # Find the device in our commands list
++        for _device, _command, _tag, _outputs, filter, excl_filter, dev in _commands:
++            if _device._name == device_name:
++                try:
++                    result = _device.run_command(command=command)
++                    return {"result": result, "command": command, "timestamp": time.time()}
++                except Exception as e:
++                    raise Exception(f"Command execution failed: {str(e)}")
++
++        raise Exception(f"Device '{device_name}' not found")
++
+     # List available protocols if asked
+     if args.protocol == "help":
+         op = get_outputs("screen")[0]
+@@ -239,6 +286,145 @@ def main():
+     #     port: 1883
+     #     user: null
+     #     pass: null
++    # Handle daemon setup and stop requests
++
++    #### Extra Logging
++    def log_process_info(label, log_func=None):
++        """Log detailed process information for debugging"""
++        if log_func is None:
++            log_func = print
++
++        pid = os.getpid()
++        ppid = os.getppid()
++
++        # Get process group and session info
++        try:
++            pgid = os.getpgid(0)
++            sid = os.getsid(0)
++        except:
++            pgid = "unknown"
++            sid = "unknown"
++
++        # Check if we're the process group leader
++        is_leader = (pid == pgid)
++
++        log_func(f"[{label}] PID: {pid}, PPID: {ppid}, PGID: {pgid}, SID: {sid}, Leader: {is_leader}")
++
++        # Log command line that started this process
++        try:
++            with open(f'/proc/{pid}/cmdline', 'r') as f:
++                cmdline = f.read().replace('\0', ' ').strip()
++            log_func(f"[{label}] Command: {cmdline}")
++        except:
++            log_func(f"[{label}] Command: {' '.join(sys.argv)}")
++
++    def log_debug_context(label, args):
++        log.debug(f"[{label}] sys.argv = {sys.argv}")
++        log.debug(f"[{label}] args.daemon = {args.daemon}")
++        log.debug(f"[{label}] args.debug = {args.debug}")
++
++    if args.debug:
++        if is_spawned_pyinstaller_process():
++            log_debug_context("CHILD", args)
++        elif is_pyinstaller_bundle():
++            log_debug_context("PARENT", args)
++        else:
++            log_debug_context("SYSTEM", args)
++
++
++    def setup_daemon_if_requested(args, log_file_path="/var/log/mpp-solar.log"):
++        if args.daemon:
++            os.environ["MPP_SOLAR_DAEMON"] = "1"
++            log.info("Daemon mode requested")
++
++            try:
++                daemon_type = detect_daemon_type()
++                log.info(f"Detected daemon type: {daemon_type}")
++            except Exception as e:
++                log.warning(f"Failed to detect daemon type: {e}, falling back to OpenRC")
++                daemon_type = DaemonType.OPENRC
++
++            daemon = get_daemon(daemontype=daemon_type)
++
++            if hasattr(daemon, 'set_pid_file_path') and args.pidfile:
++                daemon.set_pid_file_path(args.pidfile)
++                log.info(f"Using custom PID file: {args.pidfile}")
++            elif hasattr(daemon, 'pid_file_path'):
++                daemon.pid_file_path = "/tmp/mpp-solar.pid" if os.geteuid() != 0 else "/var/run/mpp-solar.pid"
++                log.info(f"Using default PID file: {daemon.pid_file_path}")
++
++            daemon.keepalive = 60
++
++            # Only call daemonize() for DISABLED daemon type (manual daemonization)
++            # OpenRC, systemd, and other init systems handle daemonization themselves
++            if daemon_type == DaemonType.DISABLED:
++                log.info("Using DISABLED daemon type - performing manual daemonization...")
++                try:
++                    daemonize()
++                    log.info("Daemonized successfully")
++                    # Re-setup logging for the daemonized process
++                    if not setup_daemon_logging(log_file_path):
++                        sys.stderr.write("CRITICAL: Failed to setup file logging for daemon. Check permissions.\n")
++                    else:
++                        log.info("Daemon file logging successfully re-initialized.")
++                except Exception as e:
++                    log.error(f"Failed to daemonize process: {e}")
++                    log.info("Continuing in foreground mode")
++            else:
++                log.info(f"Using {daemon_type.name} daemon type - init system will handle process management")
++                # For OpenRC/systemd, we still need to setup file logging since we're running as daemon
++                if not setup_daemon_logging(log_file_path):
++                    log.warning("Failed to setup file logging for daemon. Check permissions.")
++                else:
++                    log.info("Daemon file logging setup successful.")
++
++            return daemon
++        else:
++            log.info("Daemon mode NOT requested. Using DISABLED daemon.")
++            daemon = get_daemon(daemontype=DaemonType.DISABLED)
++            return daemon
++
++    # --- Optional PyInstaller bootstrap cleanup ---
++    # To enable single-process daemon spawn logic (avoids PyInstaller parent):
++    #################################################################
++#     if spawn_pyinstaller_subprocess(args):
++#       sys.exit(0)
++# 
++#     from daemon.pyinstaller_runtime import setup_spawned_environment
++#     setup_spawned_environment()
++    #################################################################
++
++    # Handle daemon stop request
++    if args.daemon_stop:
++        pid_file_path = args.pidfile
++        if pid_file_path is None:
++            # Use default based on environment
++            if os.geteuid() != 0:  # Non-root check
++                pid_file_path = "/tmp/mpp-solar.pid"
++            else:
++                pid_file_path = "/var/run/mpp-solar.pid"
++
++        log.info(f"Attempting to stop daemon using PID file: {pid_file_path}")
++
++        try:
++            daemon_type = detect_daemon_type()
++            daemon_class = get_daemon(daemontype=daemon_type).__class__
++            if hasattr(daemon_class, 'stop_daemon'):
++                success = daemon_class.stop_daemon(pid_file_path)
++                if success:
++                    print("Daemon stopped successfully")
++                else:
++                    print("Failed to stop daemon")
++                sys.exit(0 if success else 1)
++            else:
++                print("Daemon stop functionality not available for this daemon type")
++                sys.exit(1)
++        except Exception as e:
++            print(f"Error stopping daemon: {e}")
++            sys.exit(1)
++
++
++    # mqttbroker setup
+     mqtt_broker = MqttBroker(
+         config={
+             "name": args.mqttbroker,
+@@ -263,32 +449,10 @@ def main():
+     mqtt_topic = args.mqtttopic
+     push_url = args.pushurl
+     prom_output_dir = args.prom_output_dir
++    dev = args.dev
+ 
+     _commands = []
+ 
+-    # Initialize Daemon
+-    if not args.daemon:
+-        daemon = get_daemon(daemontype=DaemonType.DISABLED)
+-    else:
+-        daemon = get_daemon(daemontype=DaemonType.SYSTEMD)
+-        daemon.keepalive = 60
+-    log.info(daemon)
+-
+-
+-    # if args.daemon:
+-    #     try:
+-    #         import systemd.daemon
+-    #     except ImportError:
+-    #         print("You are missing dependencies in order to be able to use the --daemon flag.")
+-    #         print("To install them, use that command:")
+-    #         print("    python -m pip install 'mppsolar[systemd]'")
+-    #         exit(1)
+-
+-    # Tell systemd that our service is ready
+-    daemon.initialize()
+-    daemon.notify("Service Initializing ...")
+-    # set some default-defaults
+-    pause = 60
+ 
+     # If config file specified, process
+     if args.configfile:
+@@ -314,8 +478,10 @@ def main():
+         mqtt_broker.update("port", config["SETUP"].getint("mqtt_port", fallback=None))
+         mqtt_broker.update("username", config["SETUP"].get("mqtt_user", fallback=None))
+         mqtt_broker.update("password", config["SETUP"].get("mqtt_pass", fallback=None))
++        log_file_path = config["SETUP"].get("log_file", fallback="/var/log/mpp-solar.log")
+         sections.remove("SETUP")
+ 
++        # Track device configurations for MQTT command setup
+         # Process 'command' sections
+         for section in sections:
+             name = section
+@@ -336,6 +502,8 @@ def main():
+             push_url = config[section].get("push_url", fallback=push_url)
+             prom_output_dir = config[section].get("prom_output_dir", fallback=prom_output_dir)
+             mqtt_topic = config[section].get("mqtt_topic", fallback=mqtt_topic)
++            section_dev = config[section].get("dev", fallback=None)
++            mqtt_allowed_cmds = config[section].get("mqtt_allowed_cmds", fallback="")
+             #
+             device_class = get_device_class(_type)
+             log.debug(f"device_class {device_class}")
+@@ -358,10 +526,18 @@ def main():
+             # build array of commands
+             commands = _command.split("#")
+ 
++            # Setup MQTT commands if configured
++            if mqtt_allowed_cmds and mqtt_broker.enabled:
++                allowed_cmd_list = [cmd.strip() for cmd in mqtt_allowed_cmds.split(",") if cmd.strip()]
++                log.info(f"Setting up MQTT commands for device '{name}': {allowed_cmd_list}")
++                mqtt_broker.setup_device_commands(
++                    device_name=name, allowed_commands=allowed_cmd_list, command_callback=execute_device_command
++                )
++
+             for command in commands:
+-                _commands.append((device, command, tag, outputs, filter, excl_filter))
++                _commands.append((device, command, tag, outputs, filter, excl_filter, section_dev))
+             log.debug(f"Commands from config file {_commands}")
+-
++            log.debug(f"[DAEMON LOOP INIT] args.daemon={args.daemon}, pause={pause}, commands={_commands}")
+             if args.daemon:
+                 print(f"Config file: {args.configfile}")
+                 print(f"Config setting - pause: {pause}")
+@@ -395,7 +571,6 @@ def main():
+             push_url=push_url,
+             prom_output_dir=prom_output_dir,
+         )
+-        #
+ 
+         # determine whether to run command or call helper function
+         commands = []
+@@ -426,14 +601,31 @@ def main():
+                 tag = args.tag
+             else:
+                 tag = command
+-            _commands.append((device, command, tag, outputs, filter, excl_filter))
++            _commands.append((device, command, tag, outputs, filter, excl_filter, dev))
+         log.debug(f"Commands {_commands}")
+ 
++
++    # ------------------------
++    # Daemon setup and logging
++    # ------------------------
++    daemon = setup_daemon_if_requested(args, log_file_path=log_file_path)
++    log.info(daemon)
++    DAEMON_MODE = args.daemon
++    # Notify systemd/init
++    daemon.initialize()
++    log_process_info("AFTER_DAEMON_INITIALIZE", log.info)
++
++    # Start MQTT manager
++    mqtt_manager.start_all()
++    daemon.notify("Service Initializing ...")
++    log_process_info("AFTER_DAEMON_NOTIFY", log.info)
++
++
+     while True:
+         # Loop through the configured commands
+         if not args.daemon:
+             log.info(f"Looping {len(_commands)} commands")
+-        for _device, _command, _tag, _outputs, filter, excl_filter in _commands:
++        for _device, _command, _tag, _outputs, filter, excl_filter, dev in _commands:
+             # for item in mppUtilArray:
+             # Tell systemd watchdog we are still alive
+             daemon.watchdog()
+@@ -465,17 +657,25 @@ def main():
+                     filter=filter,
+                     excl_filter=excl_filter,
+                     keep_case=keep_case,
++                    dev=dev,  # ADD: Pass dev parameter to output
+                 )
++        try:
+                 # Tell systemd watchdog we are still alive
+-        if args.daemon:
+-            daemon.watchdog()
+-            print(f"Sleeping for {pause} sec")
+-            time.sleep(pause)
+-        else:
+-            # Dont loop unless running as daemon
+-            log.debug("Not daemon, so not looping")
+-            break
++#            if args.daemon:
++            if DAEMON_MODE:
++                daemon.watchdog()
++                print(f"Sleeping for {pause} sec")
++                time.sleep(pause)
++            else:
++                # Dont loop unless running as daemon
++                log.debug("Not daemon, so not looping")
++                break
++        except Exception as e:
++            log.error(f"[LOOP ERROR] Exception in daemon loop: {e}", exc_info=True)
++            time.sleep(5)  # Prevent tight loop in case of recurring errors
++    mqtt_manager.stop_all()
+ 
+ 
+ if __name__ == "__main__":
+     main()
++
+diff --git a/mppsolar/daemon/__init__.py b/mppsolar/daemon/__init__.py
+index d8eed7f..b8b2d9e 100644
+--- a/mppsolar/daemon/__init__.py
++++ b/mppsolar/daemon/__init__.py
+@@ -1,9 +1,10 @@
+-from enum import Enum, auto
++from enum import Enum
+ 
+ class DaemonType(Enum):
+     """ Daemon types implemented """
+     DISABLED = "disabled"
+     SYSTEMD = "systemd"
++    OPENRC = "openrc"
+ 
+ def get_daemon(daemontype):
+     match daemontype:
+@@ -13,5 +14,24 @@ def get_daemon(daemontype):
+         case DaemonType.SYSTEMD:
+             from .daemon_systemd import DaemonSystemd as daemon
+             return daemon()
++        case DaemonType.OPENRC:
++            from .daemon_openrc import DaemonOpenRC as daemon
++            return daemon()
+         case _:
+-            raise Exception(f"unknown daemontype {daemontype}")
+\ No newline at end of file
++            raise Exception(f"unknown daemontype {daemontype}")
++
++def detect_daemon_type():
++    """ Auto-detect the appropriate daemon type for the system """
++    import os
++    import shutil
++    
++    # Check if systemd is available
++    if shutil.which('systemctl') and os.path.exists('/run/systemd/system'):
++        return DaemonType.SYSTEMD
++    
++    # Check if OpenRC is available
++    if shutil.which('rc-service') or os.path.exists('/sbin/openrc'):
++        return DaemonType.OPENRC
++    
++    # Default to disabled/generic daemon
++    return DaemonType.OPENRC  # Use OpenRC implementation as fallback since it handles signals
+diff --git a/mppsolar/daemon/daemon.py b/mppsolar/daemon/daemon.py
+index e0c6f9e..9abfd42 100644
+--- a/mppsolar/daemon/daemon.py
++++ b/mppsolar/daemon/daemon.py
+@@ -1,4 +1,5 @@
+ """ daemon.py """
++import os
+ import logging
+ from enum import Enum, auto
+ from time import time
+@@ -6,17 +7,152 @@ from time import time
+ # Set-up logger
+ log = logging.getLogger("daemon")
+ 
++def setup_daemon_logging(log_file="/var/log/mpp-solar.log"):
++    """Setup logging for daemon mode"""
++    try:
++        # Create log directory if it doesn't exist
++        log_dir = os.path.dirname(log_file)
++        os.makedirs(log_dir, exist_ok=True)
++
++        # Setup file logging
++        file_handler = logging.FileHandler(log_file)
++        file_handler.setLevel(logging.WARNING)
++
++        # Setup formatter
++        formatter = logging.Formatter(
++            '%(asctime)s:%(levelname)s:%(module)s:%(funcName)s@%(lineno)d: %(message)s'
++        )
++        file_handler.setFormatter(formatter)
++
++        # Get root logger and add handler
++        root_logger = logging.getLogger()
++        root_logger.addHandler(file_handler)
++
++        return True
++    except Exception as e:
++        print(f"Failed to setup daemon logging: {e}")
++        return False
++
++
++def daemonize():
++    """
++    Properly daemonize the process (Unix double-fork)
++    Enhanced for PyInstaller compatibility
++    This should ONLY be called when using DaemonType.DISABLED
++    """
++    import sys
++    import logging
++
++    log = logging.getLogger("daemon")
++    pid = os.getpid()
++    ppid = os.getppid()
++    log.info(f"[DAEMONIZE] Before fork PID: {pid}, PPID: {ppid}")
++
++    # Import PyInstaller runtime functions safely
++    try:
++        from mppsolar.daemon.pyinstaller_runtime import is_pyinstaller_bundle, has_been_spawned
++    except ImportError:
++        # Fallback if module not available
++        def is_pyinstaller_bundle():
++            return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
++        def has_been_spawned():
++            return os.environ.get("MPP_SOLAR_SPAWNED") == "1"
++
++    # Special handling for PyInstaller spawned processes
++    if is_pyinstaller_bundle() and has_been_spawned():
++        log.info("[DAEMONIZE] Running in spawned PyInstaller process - using modified daemonization")
++
++        # We're already in a subprocess, so we can do a simpler daemonization
++        # Just do a single fork and session setup
++        try:
++            pid = os.fork()
++            if pid > 0:
++                log.info(f"[DAEMONIZE] Fork successful, parent exiting. Child PID: {pid}")
++                sys.exit(0)
++        except OSError as e:
++            log.error(f"Fork failed in spawned PyInstaller process: {e}")
++            sys.exit(1)
++
++        # Set up daemon environment
++        os.chdir("/")
++        os.setsid()
++        os.umask(0)
++
++        # Redirect standard file descriptors
++        _redirect_std_descriptors()
++        log.info(f"[DAEMONIZE] PyInstaller daemon process ready. PID: {os.getpid()}")
++        return
++
++    # Standard daemonization for non-PyInstaller or direct execution
++    log.info("[DAEMONIZE] Performing standard double-fork daemonization")
++
++    # First fork
++    try:
++        pid = os.fork()
++        if pid > 0:
++            log.info(f"[DAEMONIZE] First fork successful, parent exiting. Child PID: {pid}")
++            sys.exit(0)
++    except OSError as e:
++        log.error(f"First fork failed: {e}")
++        sys.exit(1)
++
++    # Decouple from parent environment
++    os.chdir("/")
++    os.setsid()
++    os.umask(0)
++
++    # Second fork
++    try:
++        pid = os.fork()
++        if pid > 0:
++            log.info(f"[DAEMONIZE] Second fork successful, intermediate parent exiting. Child PID: {pid}")
++            sys.exit(0)
++    except OSError as e:
++        log.error(f"Second fork failed: {e}")
++        sys.exit(1)
++
++    # Redirect standard file descriptors
++    _redirect_std_descriptors()
++    log.info(f"[DAEMONIZE] Daemon process forked successfully. PID: {os.getpid()}")
++
++
++def _redirect_std_descriptors():
++    """Helper function to redirect standard file descriptors to /dev/null"""
++    import sys
++
++    sys.stdout.flush()
++    sys.stderr.flush()
++
++    try:
++        with open('/dev/null', 'r') as si:
++            os.dup2(si.fileno(), sys.stdin.fileno())
++        with open('/dev/null', 'a+') as so:
++            os.dup2(so.fileno(), sys.stdout.fileno())
++        with open('/dev/null', 'a+') as se:
++            os.dup2(se.fileno(), sys.stderr.fileno())
++    except Exception as e:
++        # If redirection fails, log the error but continue
++        # (logging might not work after redirection anyway)
++        pass
++
++
+ class Daemon:
+     """ abstraction to support different daemon approaches / solutions """
+     def __str__(self):
+-        return f"Daemon name: {self.type}"
++        return f"Daemon name: {self.__class__.__name__}"
+ 
+     def initialize(self):
+         """ Daemon initialization activities """
++        log.debug("Base Daemon initialized")
+         self._notify(self._Notification.READY)
+         self._lastNotify = time()
+ 
++    def get_watchdog_path(self):
++        """Return the path for the watchdog file, derived from the PID file path."""
++        return self.pid_file_path.replace(".pid", ".watchdog")
++
+     def watchdog(self):
++        log.debug("Base Daemon watchdog ping")
+         elapsed = time() - self._lastNotify
+         if (elapsed) > self.keepalive:
+             self._notify(self._Notification.WATCHDOG)
+@@ -31,7 +167,25 @@ class Daemon:
+         # Send stopping
+         self._notify(self._Notification.STOPPING)
+ 
++    def _get_effective_pid(self):
++        """Return the PID to use for tracking this daemon.
++        For PyInstaller parent processes, return os.getppid().
++        For normal or spawned PyInstaller processes, return os.getpid().
++        Place holder"""
++        from mppsolar.daemon.pyinstaller_runtime import is_pyinstaller_bundle, is_spawned_pyinstaller_process
++        if is_pyinstaller_bundle() and not is_spawned_pyinstaller_process():
++            return os.getpid()
++        return os.getpid()
++
++
+     def log(self, message=None):
+         # Print log message
+         if message is not None:
+             self._journal(message)
++    
++    # These methods should be overridden by subclasses
++    def _notify(self, notification, message=None):
++        pass
++    
++    def _journal(self, message):
++        pass
+\ No newline at end of file
+diff --git a/mppsolar/daemon/daemon_disabled.py b/mppsolar/daemon/daemon_disabled.py
+index 55f6a5f..7c6a9c2 100644
+--- a/mppsolar/daemon/daemon_disabled.py
++++ b/mppsolar/daemon/daemon_disabled.py
+@@ -28,7 +28,9 @@ class DaemonDummy(Daemon):
+         # self.notify(f"got daemon type: {self.type}, keepalive: {self.keepalive}")
+ 
+     def _dummyNotify(self, *args, **kwargs):
++        log.debug(f"DaemonDummy notified: args={args}, kwargs={kwargs}")
+         # Print log message
+         # if args:
+         #     print(args[0])
+         return
++
+diff --git a/mppsolar/daemon/daemon_openrc.py b/mppsolar/daemon/daemon_openrc.py
+new file mode 100644
+index 0000000..751e288
+--- /dev/null
++++ b/mppsolar/daemon/daemon_openrc.py
+@@ -0,0 +1,470 @@
++""" daemon_openrc.py - Fixed version for PyInstaller compatibility """
++import logging
++import os
++from mppsolar.daemon.pyinstaller_runtime import handle_stale_pid
++import signal
++import sys
++import time
++import atexit
++from enum import Enum
++from pathlib import Path
++
++try:
++    import psutil
++    HAS_PSUTIL = True
++except ImportError:
++    HAS_PSUTIL = False
++
++from mppsolar.daemon.daemon import Daemon
++
++# Set-up logger
++log = logging.getLogger("daemon_openrc")
++
++
++class OpenRCNotification(Enum):
++    READY = "READY"
++    STATUS = "STATUS"
++    STOPPING = "STOPPING"
++    WATCHDOG = "WATCHDOG"
++
++class DaemonOpenRC(Daemon):
++    """ OpenRC daemon implementation with signal handling and configurable PID management """
++
++    def __str__(self):
++        return f"Daemon OpenRC (PID file: {self.pid_file_path})"
++
++    def __init__(self, pid_file_path=None):
++        import logging
++        log = logging.getLogger("daemon_openrc")
++    
++        pid = os.getpid()
++        ppid = os.getppid()
++        log.info(f"[OPENRC_INIT] Creating OpenRC daemon: PID={pid}, PPID={ppid}")
++    
++        self._Notification = OpenRCNotification
++        self.keepalive = 60
++        self._lastNotify = time.time()
++        self._pid_file = None
++        self._running = True
++        self._pid_file_created = False  # NEW: Track if we created the PID file
++
++        # Set PID file location with smart defaults
++        if pid_file_path:
++            self.pid_file_path = pid_file_path
++        else:
++            # Auto-determine based on permissions and environment
++            if os.geteuid() == 0:  # Running as root
++                self.pid_file_path = "/var/run/mpp-solar.pid"
++            else:  # Non-root user
++                # Try user-specific locations
++                if 'XDG_RUNTIME_DIR' in os.environ:
++                    self.pid_file_path = os.path.join(os.environ['XDG_RUNTIME_DIR'], "mpp-solar.pid")
++                else:
++                    self.pid_file_path = "/tmp/mpp-solar.pid"
++
++        log.info(f"PID file will be created at: {self.pid_file_path}")
++
++        # Register cleanup function to run on exit
++        atexit.register(self._cleanup_pid_file)
++
++        # Set up signal handlers
++        signal.signal(signal.SIGTERM, self._signal_handler)
++        signal.signal(signal.SIGINT, self._signal_handler)
++
++        # Optional: Handle SIGHUP for config reload
++        signal.signal(signal.SIGHUP, self._sighup_handler)
++
++    def set_pid_file_path(self, path):
++        """Allow external setting of PID file path"""
++        old_path = self.pid_file_path
++        self.pid_file_path = path
++        log.info(f"PID file path changed from {old_path} to {self.pid_file_path}")
++
++    def _signal_handler(self, signum, frame):
++        """ Handle SIGTERM and SIGINT for clean shutdown """
++        log.info(f"Received signal {signum}, initiating clean shutdown...")
++        self._running = False
++        self.stop()
++        self._cleanup_pid_file()
++        sys.exit(0)
++
++    def _sighup_handler(self, signum, frame):
++        """ Handle SIGHUP for potential config reload """
++        log.info("Received SIGHUP - config reload not implemented yet")
++        # Future: implement config reload functionality
++
++    def _check_existing_daemon(self):
++        """Check if daemon with PID from file is actually running"""
++        try:
++            with open(self.pid_file_path, 'r') as pid_file:
++                content = pid_file.read().strip()
++                if not content:
++                    log.warning("PID file is empty")
++                    return False
++
++                pid = int(content)
++                current_pid = os.getpid()
++
++                # If the PID in the file is our current PID, that's fine
++                if pid == current_pid:
++                    log.info(f"PID file contains our own PID {pid}, continuing")
++                    return False
++
++                log.debug(f"Checking if PID {pid} is running...")
++
++                if HAS_PSUTIL:
++                    # Use psutil if available for more reliable process checking
++                    try:
++                        process = psutil.Process(pid)
++                        if process.is_running():
++                            # Additional check - is it actually our process name?
++                            try:
++                                process_name = process.name()
++                                cmdline = ' '.join(process.cmdline())
++                                log.info(f"Process {pid} is running: {process_name}")
++                                log.debug(f"Process {pid} cmdline: {cmdline}")
++
++                                # Check if it's likely our own process (mpp-solar related)
++                                if 'mpp-solar' in process_name or 'mpp-solar' in cmdline:
++                                    return True
++                                else:
++                                    log.warning(f"Process {pid} exists but doesn't appear to be mpp-solar")
++                                    return False
++                            except (psutil.AccessDenied, psutil.ZombieProcess):
++                                # If we can't get process details, assume it's running
++                                return True
++                        else:
++                            log.info(f"Process {pid} is not running")
++                            return False
++                    except psutil.NoSuchProcess:
++                        log.info(f"No process found with PID {pid}")
++                        return False
++                else:
++                    # Fallback to os.kill method
++                    try:
++                        # Send signal 0 to check if process exists without killing it
++                        os.kill(pid, 0)
++                        log.info(f"Process {pid} exists and is running")
++                        return True
++                    except OSError:
++                        log.info(f"No process found with PID {pid}")
++                        return False
++
++        except (ValueError, FileNotFoundError, PermissionError) as e:
++            log.warning(f"Could not check existing daemon: {e}")
++            return False
++
++    def _safe_import_pyinstaller_runtime(self):
++        """
++        Safely import PyInstaller runtime functions with fallback
++        Returns tuple: (is_pyinstaller_bundle_func, has_been_spawned_func)
++        """
++        try:
++            from mppsolar.daemon.pyinstaller_runtime import is_pyinstaller_bundle, has_been_spawned
++            return is_pyinstaller_bundle, has_been_spawned
++        except ImportError:
++            log.debug("Could not import pyinstaller_runtime, using fallback functions")
++            # Fallback functions that return safe defaults
++            def fallback_is_pyinstaller_bundle():
++                return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
++
++            def fallback_has_been_spawned():
++                return os.environ.get("MPP_SOLAR_SPAWNED") == "1"
++
++            return fallback_is_pyinstaller_bundle, fallback_has_been_spawned
++
++    
++
++            if not os.path.exists(self.pid_file_path):
++                return False
++
++            with open(self.pid_file_path, 'r') as pid_file:
++                content = pid_file.read().strip()
++                if not content:
++                    return False
++
++                old_pid = int(content)
++                current_pid = os.getpid()
++
++                if old_pid == current_pid:
++                    return False
++
++                # Check if the old PID is still running
++                if HAS_PSUTIL:
++                    try:
++                        process = psutil.Process(old_pid)
++                        if process.is_running():
++                            cmdline = ' '.join(process.cmdline())
++                            # If it's a PyInstaller bootstrap process, it's likely stale
++                            if 'mpp-solar' in cmdline and process.ppid() != os.getppid():
++                                log.info(f"Detected potential stale PyInstaller bootstrap PID {old_pid}")
++                                return True
++                    except (psutil.NoSuchProcess, psutil.AccessDenied):
++                        # Process doesn't exist, definitely stale
++                        return True
++                else:
++                    # Fallback: if we can't signal the process, assume it's stale
++                    try:
++                        os.kill(old_pid, 0)
++                        return False  # Process exists
++                    except OSError:
++                        return True  # Process doesn't exist, stale
++
++        except Exception as e:
++            log.debug(f"Error checking for stale PyInstaller PID: {e}")
++
++        return False
++
++    def _create_pid_file(self):
++        """ Create PID file with current process ID """
++        pid = self._get_effective_pid()
++        log.info(f"Creating PID file {self.pid_file_path} with PID {pid}")
++
++        try:
++            # Ensure directory exists and is writable
++            pid_dir = Path(self.pid_file_path).parent
++            pid_dir.mkdir(parents=True, exist_ok=True)
++            log.debug(f"PID directory ensured: {pid_dir}")
++
++            # Check directory permissions
++            if not os.access(pid_dir, os.W_OK):
++                log.error(f"No write permission for PID directory: {pid_dir}")
++                return False
++
++            # Check if file already exists and handle appropriately
++            if os.path.exists(self.pid_file_path):
++                log.warning(f"PID file {self.pid_file_path} already exists, checking if daemon is running...")
++
++                # Special handling for PyInstaller stale PIDs
++                if not handle_stale_pid(
++                    self.pid_file_path,
++                    *self._safe_import_pyinstaller_runtime(),
++                    self._check_existing_daemon,
++                ):
++                    return False
++                elif self._check_existing_daemon():
++                    log.error("Another daemon instance is already running")
++                    return False
++                else:
++                    log.info("Removing stale PID file")
++                    try:
++                        os.remove(self.pid_file_path)
++                    except Exception as e:
++                        log.error(f"Failed to remove stale PID file: {e}")
++                        return False
++
++            # Create PID file with explicit write and flush
++            try:
++                # Use atomic write operation where possible
++                temp_pid_file = f"{self.pid_file_path}.tmp"
++
++                with open(temp_pid_file, 'w') as pid_file:
++                    pid_file.write(str(pid))
++                    pid_file.flush()  # Ensure data is written to disk
++                    os.fsync(pid_file.fileno())  # Force kernel to write to disk
++
++                # Atomically move temp file to final location
++                os.rename(temp_pid_file, self.pid_file_path)
++
++                log.info(f"Successfully created PID file: {self.pid_file_path} with PID {pid}")
++                self._pid_file_created = True  # NEW: Mark that we created it
++
++                # Verify the file was written correctly
++                with open(self.pid_file_path, 'r') as verify_file:
++                    written_pid = verify_file.read().strip()
++                    if written_pid != str(pid):
++                        log.error(f"PID file verification failed: expected {pid}, got '{written_pid}'")
++                        return False
++                    log.debug(f"PID file verification successful: {written_pid}")
++
++                return True
++
++            except Exception as e:
++                log.error(f"Failed to write to PID file {self.pid_file_path}: {e}")
++                # Clean up temporary file if it exists
++                temp_pid_file = f"{self.pid_file_path}.tmp"
++                if os.path.exists(temp_pid_file):
++                    try:
++                        os.remove(temp_pid_file)
++                    except:
++                        pass
++                return False
++
++        except Exception as e:
++            log.error(f"Failed to create PID file {self.pid_file_path}: {e}")
++            return False
++
++    def _cleanup_pid_file(self):
++        """ Remove PID file on shutdown """
++        # Only clean up if we created the PID file
++        if not self._pid_file_created:
++            log.debug("Skipping PID file cleanup - we didn't create it")
++            return
++            
++        try:
++            if os.path.exists(self.pid_file_path):
++                # Verify it's our PID before removing
++                try:
++                    with open(self.pid_file_path, 'r') as pid_file:
++                        content = pid_file.read().strip()
++                        if content and int(content) == os.getpid():
++                            os.remove(self.pid_file_path)
++                            log.info(f"Removed PID file: {self.pid_file_path}")
++                        else:
++                            log.warning(f"PID file contains different PID ({content}), not removing")
++                except (ValueError, FileNotFoundError):
++                    # File doesn't exist or has invalid content, try to remove anyway
++                    os.remove(self.pid_file_path)
++                    log.info(f"Removed PID file: {self.pid_file_path}")
++        except Exception as e:
++            log.error(f"Failed to remove PID file {self.pid_file_path}: {e}")
++        #----- clean up watchdog file ----#
++        watchdog_path = self.get_watchdog_path()
++        if os.path.exists(watchdog_path):
++            try:
++                os.remove(watchdog_path)
++                log.info(f"Removed watchdog file: {watchdog_path}")
++            except Exception as e:
++                log.warning(f"Failed to remove watchdog file: {e}")
++
++    def initialize(self):
++        """Initialize daemon and create PID file"""
++        log.info("Initializing OpenRC daemon...")
++
++        pid = os.getpid()
++        ppid = os.getppid()
++        log.info(f"[OPENRC_INITIALIZE] Before PID file creation: PID={pid}, PPID={ppid}")
++
++        # Create PID file
++        if not self._create_pid_file():
++            log.error("Failed to create PID file, daemon cannot start")
++            sys.exit(1)
++        log.info(f"[OPENRC_INITIALIZE] After PID file creation: PID={pid}, PPID={ppid}")
++
++        # Call parent initialization
++        super().initialize()
++        log.info("OpenRC daemon initialized successfully")
++
++    def stop(self):
++        """Stop daemon and clean up"""
++        log.info("Stopping OpenRC daemon...")
++        self._running = False
++        super().stop()
++
++    def is_running(self):
++        """Check if daemon should continue running"""
++        return self._running
++
++    @classmethod
++    def stop_daemon(cls, pid_file_path):
++        """Class method to stop a running daemon by PID file"""
++        log.info(f"Attempting to stop daemon using PID file: {pid_file_path}")
++
++        try:
++            if not os.path.exists(pid_file_path):
++                log.error(f"PID file not found: {pid_file_path}")
++                return False
++
++            with open(pid_file_path, 'r') as pid_file:
++                content = pid_file.read().strip()
++                if not content:
++                    log.error("PID file is empty")
++                    return False
++
++                pid = int(content)
++                log.info(f"Found PID {pid} in file, attempting to terminate...")
++
++                # Check if process exists before trying to kill it
++                try:
++                    os.kill(pid, 0)  # Signal 0 just checks if process exists
++                except OSError:
++                    log.warning(f"Process {pid} not found, removing stale PID file")
++                    try:
++                        os.remove(pid_file_path)
++                    except:
++                        pass
++                    return True  # Consider this success since daemon isn't running
++
++                # Try graceful shutdown first (SIGTERM)
++                try:
++                    log.info(f"Sending SIGTERM to PID {pid}")
++                    os.kill(pid, signal.SIGTERM)
++
++                    # Wait a bit for graceful shutdown
++                    for i in range(10):  # Wait up to 10 seconds
++                        time.sleep(1)
++                        try:
++                            os.kill(pid, 0)  # Check if still running
++                        except OSError:
++                            # Process has terminated
++                            log.info(f"Process {pid} terminated gracefully")
++                            # Clean up PID file if it still exists
++                            if os.path.exists(pid_file_path):
++                                try:
++                                    os.remove(pid_file_path)
++                                    log.info(f"Removed PID file: {pid_file_path}")
++                                except:
++                                    pass
++                            return True
++
++                    # If still running, try SIGKILL
++                    log.warning(f"Process {pid} didn't respond to SIGTERM, sending SIGKILL")
++                    os.kill(pid, signal.SIGKILL)
++
++                    # Wait for force kill
++                    for i in range(5):  # Wait up to 5 seconds
++                        time.sleep(1)
++                        try:
++                            os.kill(pid, 0)  # Check if still running
++                        except OSError:
++                            # Process has terminated
++                            log.info(f"Process {pid} terminated forcefully")
++                            # Clean up PID file
++                            if os.path.exists(pid_file_path):
++                                try:
++                                    os.remove(pid_file_path)
++                                    log.info(f"Removed PID file: {pid_file_path}")
++                                except:
++                                    pass
++                            return True
++
++                    log.error(f"Failed to terminate process {pid}")
++                    return False
++
++                except OSError as e:
++                    log.error(f"Failed to send signal to process {pid}: {e}")
++                    return False
++
++        except (ValueError, FileNotFoundError, PermissionError) as e:
++            log.error(f"Error stopping daemon: {e}")
++            return False
++            
++            
++    def watchdog(self):
++        """OpenRC watchdog heartbeat"""
++        now = time.time()
++        time_since_last = now - self._lastNotify
++        self._lastNotify = now
++
++        log.debug(f"[WATCHDOG] Ping at {time.strftime('%Y-%m-%d %H:%M:%S')} (Δ {time_since_last:.2f}s)")
++
++        # Use PID-derived watchdog path
++        watchdog_path = self.get_watchdog_path()
++
++        try:
++            with open(watchdog_path, "w") as f:
++                f.write(f"watchdog ping: {int(now)}\n")
++        except Exception as e:
++            log.warning(f"Watchdog write failed: {e}")
++
++
++    def _notify(self, notification, message=None):
++        """Handle daemon notifications"""
++        if message:
++            log.info(f"Daemon notification: {notification.value} - {message}")
++        else:
++            log.debug(f"Daemon notification: {notification.value}")
++
++    def _journal(self, message):
++        """Log message to system journal (or regular log)"""
++        log.info(message)
+\ No newline at end of file
+diff --git a/mppsolar/daemon/pyinstaller_runtime.py b/mppsolar/daemon/pyinstaller_runtime.py
+new file mode 100644
+index 0000000..c4ec790
+--- /dev/null
++++ b/mppsolar/daemon/pyinstaller_runtime.py
+@@ -0,0 +1,296 @@
++""" pyinstaller_runtime.py """
++import os
++import sys
++import time
++import subprocess
++import logging
++import shutil
++import tempfile
++import atexit
++
++log = logging.getLogger(__name__)
++
++
++def is_pyinstaller_bundle():
++    # True if running in a PyInstaller bundle
++    return getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
++
++
++def has_been_spawned():
++    val = os.environ.get("MPP_SOLAR_SPAWNED")
++    log.info(f"has_been_spawned(): MPP_SOLAR_SPAWNED={val}")
++    return val == "1"
++
++def is_spawned_pyinstaller_process():
++    return is_pyinstaller_bundle() and has_been_spawned()
++
++
++def copy_essential_files():
++    """
++    Copy essential files from PyInstaller temp dir to a permanent location
++    Returns the permanent directory path
++    """
++    if not is_pyinstaller_bundle():
++        return None
++
++    try:
++        # Create a permanent directory for our files
++        permanent_dir = tempfile.mkdtemp(prefix="mpp_solar_", suffix="_daemon")
++        log.info(f"Created permanent directory: {permanent_dir}")
++
++        # Copy the entire extracted directory to permanent location
++        meipass_contents = os.listdir(sys._MEIPASS)
++        for item in meipass_contents:
++            src = os.path.join(sys._MEIPASS, item)
++            dst = os.path.join(permanent_dir, item)
++
++            if os.path.isdir(src):
++                shutil.copytree(src, dst, symlinks=True)
++            else:
++                shutil.copy2(src, dst)
++
++        # Make sure the main script is executable
++        main_script = os.path.join(permanent_dir, 'mpp-solar')
++        if os.path.exists(main_script):
++            os.chmod(main_script, 0o755)
++
++        return permanent_dir
++
++    except Exception as e:
++        log.error(f"Failed to copy essential files: {e}")
++        return None
++
++
++def setup_permanent_environment(permanent_dir):
++    """Set up environment to use permanent directory instead of _MEIPASS"""
++    if permanent_dir:
++        # Update sys.path to use permanent directory
++        if sys._MEIPASS in sys.path:
++            sys.path.remove(sys._MEIPASS)
++        sys.path.insert(0, permanent_dir)
++
++        # Update _MEIPASS to point to permanent directory
++        sys._MEIPASS = permanent_dir
++        
++        # Register cleanup for permanent directory
++        atexit.register(cleanup_permanent_directory, permanent_dir)
++        
++        log.info(f"Environment updated to use permanent directory: {permanent_dir}")
++
++
++def cleanup_permanent_directory(permanent_dir):
++    """Clean up the permanent directory on exit"""
++    try:
++        if os.path.exists(permanent_dir):
++            shutil.rmtree(permanent_dir)
++            log.info(f"Cleaned up permanent directory: {permanent_dir}")
++    except Exception as e:
++        log.warning(f"Failed to clean up permanent directory {permanent_dir}: {e}")
++
++
++def _log_runtime_context(label, log_func=None):
++    if log_func is None:
++        log_func = log.debug
++
++    pid = os.getpid()
++    ppid = os.getppid()
++    try:
++        pgid = os.getpgid(0)
++        sid = os.getsid(0)
++    except OSError:
++        pgid = "unknown"
++        sid = "unknown"
++
++    is_leader = (pid == pgid)
++    frozen = getattr(sys, 'frozen', False)
++    meipass = getattr(sys, '_MEIPASS', 'N/A')
++    spawned = os.environ.get("MPP_SOLAR_SPAWNED", "N/A")
++    permanent_dir = os.environ.get("MPP_SOLAR_PERMANENT_DIR", "N/A")
++
++    log_func(f"[{label}] Process Info: PID={pid}, PPID={ppid}, PGID={pgid}, SID={sid}, Leader={is_leader}")
++    log_func(f"[{label}] Sys Info: sys.frozen={frozen}, _MEIPASS={meipass}")
++    log_func(f"[{label}] Env Info: MPP_SOLAR_SPAWNED={spawned}, MPP_SOLAR_PERMANENT_DIR={permanent_dir}")
++    log_func(f"[{label}] Current Working Dir: {os.getcwd()}")
++
++
++def cleanup_bootstrap_pid_file(pid_file_path):
++    """
++    Clean up PID file created by bootstrap process
++    """
++    try:
++        if os.path.exists(pid_file_path):
++            # Check if the PID in the file is our bootstrap process
++            with open(pid_file_path, 'r') as f:
++                bootstrap_pid = int(f.read().strip())
++
++            current_pid = os.getpid()
++
++            if bootstrap_pid == current_pid:
++                log.info(f"Removing bootstrap PID file {pid_file_path} (PID {bootstrap_pid})")
++                os.remove(pid_file_path)
++            else:
++                log.debug(f"PID file contains different PID {bootstrap_pid}, not our bootstrap PID {current_pid}")
++
++    except Exception as e:
++        log.warning(f"Failed to cleanup bootstrap PID file {pid_file_path}: {e}")
++
++
++def spawn_pyinstaller_subprocess(args):
++    """
++    Handles PyInstaller bootstrap-spawn logic to prevent premature termination
++    of daemonized processes.
++    Returns True if a subprocess is spawned and parent should exit.
++    """
++    _log_runtime_context("PR_PARENT_ENTRY", log.debug)
++    if args.daemon and is_pyinstaller_bundle() and not has_been_spawned():
++        log.warning("Running from PyInstaller — spawning subprocess to survive bootstrap parent")
++        _log_runtime_context("PR_PARENT_BEFORE_FORK", log.info)
++
++        # Clean up any PID file created by the bootstrap process
++        pid_file_paths = []
++
++        # Try to determine the PID file path that might have been created
++        if hasattr(args, 'pid_file') and args.pid_file:
++            pid_file_paths.append(args.pid_file)
++
++        # Add common default locations
++        if os.geteuid() == 0:  # Running as root
++            pid_file_paths.extend(["/var/run/mpp-solar.pid", "/var/run/mppsolard.pid"])
++        else:
++            if 'XDG_RUNTIME_DIR' in os.environ:
++                pid_file_paths.append(os.path.join(os.environ['XDG_RUNTIME_DIR'], "mpp-solar.pid"))
++            pid_file_paths.append("/tmp/mpp-solar.pid")
++
++        # Clean up bootstrap-created PID files
++        for pid_file_path in pid_file_paths:
++            cleanup_bootstrap_pid_file(pid_file_path)
++
++        # Create permanent copy of extracted files
++        permanent_dir = copy_essential_files()
++        if not permanent_dir:
++            log.critical("Failed to create permanent copy of files")
++            return False
++
++        new_env = os.environ.copy()
++        new_env["MPP_SOLAR_SPAWNED"] = "1"
++        new_env["MPP_SOLAR_PERMANENT_DIR"] = permanent_dir
++
++        # NEW: Pass information about cleaned up PID files
++        new_env["MPP_SOLAR_CLEANED_PID_FILES"] = ",".join(pid_file_paths)
++
++        executable = os.path.join(permanent_dir, os.path.basename(sys.executable))
++        if not os.path.exists(executable):
++            executable = sys.executable
++
++        cmd_args = sys.argv[1:]
++        if "--daemon" not in cmd_args:
++            cmd_args.append("--daemon")
++
++        cmd = [executable] + cmd_args
++
++        log.info(f"Launching child with cmd: {' '.join(cmd)}")
++        log.debug(f"Spawning child subprocess: {cmd}")
++        log.debug(f"Working directory: {permanent_dir}")
++        _log_runtime_context("PR_PARENT_SPAWNING", log.warning)
++        log.warning(f"[SPAWN] sys.argv: {sys.argv}")
++        log.warning(f"[SPAWN] final cmd: {cmd}")
++        log.warning(f"[SPAWN] is_pyinstaller_bundle: {is_pyinstaller_bundle()}")
++        log.warning(f"[SPAWN] has_been_spawned: {has_been_spawned()}")
++        log.warning(f"[SPAWN] args.daemon: {args.daemon}")
++#         print("ENV:", dict(os.environ)) # troubleshooting
++
++        try:
++            proc = subprocess.Popen(
++                cmd, 
++                env=new_env, 
++                cwd=permanent_dir,
++                start_new_session=True,
++                stdout=subprocess.DEVNULL,
++                stderr=subprocess.DEVNULL,
++                stdin=subprocess.DEVNULL
++            )
++
++            # Wait a bit to ensure child process starts successfully
++            for i in range(10):
++                if proc.poll() is not None:
++                    if proc.returncode == 0:
++                        log.info(f"Child process (PID: {proc.pid}) exited cleanly (expected for daemon mode and PyInstaller bootstrap).")
++                    else:
++                        log.error(f"Child process (PID: {proc.pid}) exited prematurely with code: {proc.returncode}")
++                        log.info("Child ENV MPP_SOLAR_SPAWNED = %s", os.environ.get("MPP_SOLAR_SPAWNED"))
++                        log.info("Child ENV MPP_SOLAR_PERMANENT_DIR = %s", os.environ.get("MPP_SOLAR_PERMANENT_DIR"))
++                    cleanup_permanent_directory(permanent_dir)
++                    return True
++                time.sleep(0.5)
++
++            log.info(f"Child process started successfully with PID: {proc.pid}. Parent exiting.")
++            return True
++            
++        except Exception as e:
++            log.critical(f"Failed to spawn subprocess: {e}", exc_info=True)
++            cleanup_permanent_directory(permanent_dir)
++            return False
++
++    return False
++
++
++def setup_spawned_environment():
++    """
++    Set up environment for spawned process to use permanent directory
++    """
++    _log_runtime_context("PR_SPAWNED_CHILD_SETUP_ENTRY", log.debug)
++    if has_been_spawned() and is_pyinstaller_bundle():
++        permanent_dir = os.environ.get("MPP_SOLAR_PERMANENT_DIR")
++        if permanent_dir and os.path.exists(permanent_dir):
++            setup_permanent_environment(permanent_dir)
++            _log_runtime_context("PR_SPAWNED_CHILD_SETUP_COMPLETE", log.info)
++
++            # Log information about cleaned PID files
++            cleaned_files = os.environ.get("MPP_SOLAR_CLEANED_PID_FILES", "")
++            if cleaned_files:
++                log.info(f"Bootstrap process cleaned up PID files: {cleaned_files}")
++
++            return True
++        else:
++            _log_runtime_context("PR_SPAWNED_CHILD_SETUP_EXIT - Spawned process but permanent directory not found: {permanent_dir}. Continuing without explicit permanent environment setup.", log.warning)
++    return False
++
++import os
++import logging
++log = logging.getLogger(__name__)
++
++def is_stale_pyinstaller_pid(check_func_bundle, check_func_spawned):
++    """
++    Check if the PID file contains a stale PyInstaller bootstrap process PID
++    :param check_func_bundle: function that returns True if PyInstaller bundle
++    :param check_func_spawned: function that returns True if PyInstaller has spawned
++    :return: bool
++    """
++    try:
++        return check_func_bundle() and check_func_spawned()
++    except Exception:
++        return False
++
++def handle_stale_pid(pid_file_path, check_bundle, check_spawned, check_existing):
++    """
++    Check for stale PID files and handle removal logic.
++    Returns True if it is safe to continue, or False if a daemon is already running or error occurs.
++    """
++    if is_stale_pyinstaller_pid(check_bundle, check_spawned):
++        log.info("Removing stale PyInstaller bootstrap PID file")
++        try:
++            os.remove(pid_file_path)
++        except Exception as e:
++            log.error(f"Failed to remove stale PID file: {e}")
++            return False
++    elif check_existing():
++        log.error("Another daemon instance is already running")
++        return False
++    else:
++        log.info("Removing stale PID file")
++        try:
++            os.remove(pid_file_path)
++        except Exception as e:
++            log.error(f"Failed to remove stale PID file: {e}")
++            return False
++    return True
+diff --git a/mppsolar/devices/device.py b/mppsolar/devices/device.py
+index ebb5499..937b34a 100644
+--- a/mppsolar/devices/device.py
++++ b/mppsolar/devices/device.py
+@@ -5,7 +5,7 @@ from abc import ABC
+ from mppsolar.version import __version__  # noqa: F401
+ from mppsolar.helpers import get_kwargs
+ from mppsolar.inout import get_port
+-from mppsolar.protocols import get_protocol  # , get_device_id
++from mppsolar.protocols import get_protocol
+ 
+ PORT_TYPE_UNKNOWN = 0
+ PORT_TYPE_TEST = 1
+@@ -17,20 +17,15 @@ PORT_TYPE_MQTT = 32
+ PORT_TYPE_VSERIAL = 64
+ PORT_TYPE_DALYSERIAL = 128
+ 
+-# log = None
+ log = logging.getLogger("device")
+ 
+ 
+ class AbstractDevice(ABC):
+     """
+-    Abstract device class
++    Abstract device class with improved error handling
+     """
+ 
+     def __init__(self, *args, **kwargs):
+-        global log
+-        # self._protocol = None
+-        # self._protocol_class = None
+-        # self._port = None
+         log.debug(f"__init__ args {args}")
+         log.debug(f"__init__ kwargs {kwargs}")
+         self._name = get_kwargs(kwargs, "name")
+@@ -46,22 +41,22 @@ class AbstractDevice(ABC):
+ 
+     def run_command(self, command) -> dict:
+         """
+-        generic method for running a 'raw' command
++        Generic method for running a 'raw' command with improved error handling
+         """
+         log.info(f"Running command {command}")
+ 
++        # Pre-flight checks
+         if self._protocol is None:
+-            log.error("Attempted to run command with no protocol defined")
+-            return {"ERROR": ["Attempted to run command with no protocol defined", ""]}
++            error_msg = "Attempted to run command with no protocol defined"
++            log.error(error_msg)
++            return {"ERROR": [error_msg, ""]}
++            
+         if self._port is None:
+-            log.error(f"No communications port defined - unable to run command {command}")
+-            return {
+-                "ERROR": [
+-                    f"No communications port defined - unable to run command {command}",
+-                    "",
+-                ]
+-            }
++            error_msg = f"No communications port defined - unable to run command {command}"
++            log.error(error_msg)
++            return {"ERROR": [error_msg, ""]}
+ 
++        # Handle special commands
+         if command == "list_commands":
+             return self._protocol.list_commands()
+         if command == "get_status":
+@@ -73,101 +68,199 @@ class AbstractDevice(ABC):
+         if command == "get_version":
+             return self.get_version()
+ 
++        # Use default command if none specified
+         if not command:
+             command = self._protocol.DEFAULT_COMMAND
+ 
+-        # Send command and receive data
+-        full_command = self._protocol.get_full_command(command)
+-        log.info(f"full command {full_command} for command {command}")
+-        if full_command is None:
+-            log.error(f"full_command not found for {command} in protocol {self._protocol._protocol_id}")
+-            return {
+-                "ERROR": [
+-                    f"full_command not found for {command} in protocol {self._protocol._protocol_id}",
+-                    "",
+-                ]
+-            }
++        try:
++            # Get the full command
++            full_command = self._protocol.get_full_command(command)
++            log.info(f"Full command {full_command} for command {command}")
++            
++            if full_command is None:
++                error_msg = f"Full command not found for {command} in protocol {self._protocol._protocol_id}"
++                log.error(error_msg)
++                return {"ERROR": [error_msg, ""]}
+ 
+-        # Band-aid solution, need to reduce what is sent
+-        raw_response = self._port.send_and_receive(
+-            command=command,
+-            full_command=full_command,
+-            protocol=self._protocol,
+-            command_defn=self._protocol.get_command_defn(command),
+-        )
+-        log.debug(f"Send and Receive Response {raw_response}")
+-
+-        # Handle errors
+-        # Maybe there should a decode for ERRORs and WARNINGS...
+-        # Some inverters return the command if the command is unknown:
+-        if raw_response == full_command:
+-            return {
+-                "ERROR": [
+-                    f"Inverter returned the command string for {command} - the inverter didnt recognise this command",
+-                    "",
+-                ]
+-            }
+-        # dict is returned on exception
+-        # if isinstance(raw_response, dict):
+-        #     return raw_response
++            # Send command and receive data with error handling
++            raw_response = self._send_command_with_retry(command, full_command)
++            
++            # Check if we got an error response
++            if isinstance(raw_response, dict) and "ERROR" in raw_response:
++                return raw_response
++                
++            log.debug(f"Send and Receive Response {raw_response}")
++
++            # Handle specific response patterns
++            if raw_response == full_command:
++                error_msg = f"Inverter returned the command string for {command} - the inverter didn't recognise this command"
++                log.warning(error_msg)
++                return {"ERROR": [error_msg, ""]}
+ 
+-        # Decode response
+-        decoded_response = self._protocol.decode(raw_response, command)
+-        log.info(f"Decoded response {decoded_response}")
++            # Decode response
++            try:
++                decoded_response = self._protocol.decode(raw_response, command)
++                log.info(f"Decoded response {decoded_response}")
++                return decoded_response
++                
++            except Exception as e:
++                error_msg = f"Failed to decode response for command {command}: {e}"
++                log.error(error_msg)
++                return {"ERROR": [error_msg, ""]}
+ 
+-        return decoded_response
++        except Exception as e:
++            error_msg = f"Unexpected error running command {command}: {e}"
++            log.error(error_msg, exc_info=True)
++            return {"ERROR": [error_msg, ""]}
++
++    def _send_command_with_retry(self, command: str, full_command: bytes, max_retries: int = 3) -> dict:
++        """
++        Send command with retry logic and comprehensive error handling
++        """
++        last_error = None
++        
++        for attempt in range(max_retries):
++            try:
++                log.debug(f"Command attempt {attempt + 1}/{max_retries} for {command}")
++                
++                raw_response = self._port.send_and_receive(
++                    command=command,
++                    full_command=full_command,
++                    protocol=self._protocol,
++                    command_defn=self._protocol.get_command_defn(command),
++                )
++                
++                # If we get a valid response, return it
++                if raw_response is not None:
++                    return raw_response
++                    
++            except Exception as e:
++                last_error = e
++                log.warning(f"Command attempt {attempt + 1} failed: {e}")
++                
++                # If this is the last attempt, don't sleep
++                if attempt < max_retries - 1:
++                    # Progressive backoff: wait longer between retries
++                    import time
++                    wait_time = 1.0 * (attempt + 1)
++                    log.debug(f"Waiting {wait_time}s before retry...")
++                    time.sleep(wait_time)
++        
++        # All attempts failed
++        error_msg = f"Command {command} failed after {max_retries} attempts. Last error: {last_error}"
++        log.error(error_msg)
++        return {"ERROR": [error_msg, ""]}
+ 
+     def get_status(self) -> dict:
+-        # Run all the commands that are defined as status from the protocol definition
++        """
++        Run all the commands that are defined as status from the protocol definition
++        """
+         data = {}
++        failed_commands = []
++        
+         for command in self._protocol.STATUS_COMMANDS:
+-            data.update(self.run_command(command))
++            try:
++                result = self.run_command(command)
++                if isinstance(result, dict) and "ERROR" in result:
++                    failed_commands.append(command)
++                    log.warning(f"Status command {command} failed: {result['ERROR']}")
++                else:
++                    data.update(result)
++            except Exception as e:
++                failed_commands.append(command)
++                log.error(f"Exception running status command {command}: {e}")
++        
++        # Add a summary of failed commands if any
++        if failed_commands:
++            data["_failed_status_commands"] = [", ".join(failed_commands), ""]
++            
+         return data
+ 
+     def get_settings(self) -> dict:
+-        # Run all the commands that are defined as settings from the protocol definition
++        """
++        Run all the commands that are defined as settings from the protocol definition
++        """
+         data = {}
++        failed_commands = []
++        
+         for command in self._protocol.SETTINGS_COMMANDS:
+-            data.update(self.run_command(command))
+-        return data
+-
+-    def _get_device_id(self) -> dict:
+-        # Try to work out the 'id' for this device
+-        # need to know what port/porttype we are connected to
+-        # then ...ABC
+-
+-        # return get_device_id()
+-        _id = ""
+-        if self._protocol.ID_COMMANDS:
+-            # print(self._protocol.ID_COMMANDS)
+-            for line in self._protocol.ID_COMMANDS:
+-                if isinstance(line, tuple):
+-                    command = line[0]
+-                else:
+-                    command = line
++            try:
+                 result = self.run_command(command)
+-                if isinstance(line, tuple):
+-                    key = line[1]
++                if isinstance(result, dict) and "ERROR" in result:
++                    failed_commands.append(command)
++                    log.warning(f"Settings command {command} failed: {result['ERROR']}")
+                 else:
+-                    key = list(result).pop()
++                    data.update(result)
++            except Exception as e:
++                failed_commands.append(command)
++                log.error(f"Exception running settings command {command}: {e}")
++        
++        # Add a summary of failed commands if any
++        if failed_commands:
++            data["_failed_settings_commands"] = [", ".join(failed_commands), ""]
++            
++        return data
+ 
+-                # last_key = list(result).pop()
+-                value = result[key][0]
++    def _get_device_id(self) -> dict:
++        """
++        Try to work out the 'id' for this device with error handling
++        """
++        try:
++            _id = ""
++            if self._protocol.ID_COMMANDS:
++                for line in self._protocol.ID_COMMANDS:
++                    if isinstance(line, tuple):
++                        command = line[0]
++                    else:
++                        command = line
++                        
++                    result = self.run_command(command)
++                    
++                    # Check if command failed
++                    if isinstance(result, dict) and "ERROR" in result:
++                        log.warning(f"ID command {command} failed: {result['ERROR']}")
++                        continue
++                    
++                    if isinstance(line, tuple):
++                        key = line[1]
++                    else:
++                        key = list(result).pop()
+ 
+-                if not _id:
+-                    _id = f"{value}"
+-                else:
+-                    _id = f"{_id}:{value}"
+-            log.info(f"DeviceId: {_id}")
+-            return {"_command": "Get Device ID", "_command_description": "Generate a device id", "DeviceID": [_id, ""]}
+-        else:
++                    try:
++                        value = result[key][0]
++                        if not _id:
++                            _id = f"{value}"
++                        else:
++                            _id = f"{_id}:{value}"
++                    except (KeyError, IndexError, TypeError) as e:
++                        log.warning(f"Failed to extract device ID from command {command}: {e}")
++                        continue
++                        
++                log.info(f"DeviceId: {_id}")
++                return {
++                    "_command": "Get Device ID", 
++                    "_command_description": "Generate a device id", 
++                    "DeviceID": [_id if _id else "Unable to determine device ID", ""]
++                }
++            else:
++                return {
++                    "_command": "Get Device ID",
++                    "_command_description": "Generate a device id",
++                    "DeviceID": ["getDeviceId not supported for this protocol", ""],
++                }
++        except Exception as e:
++            error_msg = f"Error getting device ID: {e}"
++            log.error(error_msg)
+             return {
+                 "_command": "Get Device ID",
+                 "_command_description": "Generate a device id",
+-                "DeviceID": ["getDeviceId not supported for this protocol", ""],
++                "DeviceID": [error_msg, ""],
+             }
+ 
+     def get_version(self) -> dict:
++        """
++        Get the software version
++        """
+         return {
+             "_command": "Get Version",
+             "_command_description": "Output the mpp-solar software version",
+diff --git a/mppsolar/helpers.py b/mppsolar/helpers.py
+index 70a608a..2242f33 100644
+--- a/mppsolar/helpers.py
++++ b/mppsolar/helpers.py
+@@ -1,10 +1,18 @@
+ #!/usr/bin/env python3
++import os
++import sys
+ import logging
+ import importlib
+ 
+ log = logging.getLogger("helpers")
+ 
+ 
++def is_daemon_mode():
++    """Return True if running as daemon based on env or global flag."""
++    import os
++    return os.environ.get("MPP_SOLAR_DAEMON", "0") == "1"
++
++
+ def get_kwargs(kwargs, key, default=None):
+     return kwargs.get(key) or default
+ 
+@@ -127,3 +135,7 @@ class CRC_XModem:
+     def crc_hex(self, data):
+         crc = self.compute_crc(data)
+         return format(crc, '04x').upper()
++
++
++
++
+diff --git a/mppsolar/inout/hidrawio.py b/mppsolar/inout/hidrawio.py
+index d44edfb..2d288f8 100644
+--- a/mppsolar/inout/hidrawio.py
++++ b/mppsolar/inout/hidrawio.py
+@@ -1,65 +1,170 @@
+ # shamelessly stolen from ccrisan https://github.com/qtoggle/qtoggleserver-mppsolar/blob/master/qtoggleserver/mppsolar/io.py
++# Added better error handling principals 2025 Corey DeLasaux <cordelster@gmail.com>
+ import logging
+ import os
+ import time
++import errno
+ 
+ from .baseio import BaseIO
+ from ..helpers import get_kwargs
+ 
+-log = logging.getLogger("HIDRawIO")
++log = logging.getLogger(__name__)
+ 
+ 
+ class HIDRawIO(BaseIO):
+-    def __init__(self, device_path: str) -> None:
+-        # self._fd = os.open(device_path, flags=os.O_RDWR | os.O_NONBLOCK)
++    """
++    Handles HIDRAW serial communications.
++    Purpose: Added better error handling and progressive backoff.
++    """
++    def __init__(self, device_path: str, timeout: float = 5.0, max_retries: int = 3) -> None:
+         self._device = device_path
++        self._timeout = timeout
++        self._max_retries = max_retries
+ 
+     def send_and_receive(self, *args, **kwargs) -> dict:
+         full_command = get_kwargs(kwargs, "full_command")
++        
++        for attempt in range(self._max_retries):
++            try:
++                return self._attempt_communication(full_command)
++            except (TimeoutError, OSError) as e:
++                log.warning(f"Communication attempt {attempt + 1} failed: {e}")
++                if attempt == self._max_retries - 1:
++                    # Last attempt failed, return error
++                    error_msg = f"Communication failed after {self._max_retries} attempts: {e}"
++                    log.error(error_msg)
++                    return {"ERROR": [error_msg, ""]}
++                # Wait before retry
++                time.sleep(0.5 * (attempt + 1))  # Progressive backoff
++        
++        # This shouldn't be reached, but just in case
++        return {"ERROR": ["Unexpected error in communication retry loop", ""]}
++
++    def _attempt_communication(self, full_command: bytes) -> dict:
++        """Single attempt at communication with the device"""
+         response_line = bytes()
+         usb0 = None
++        
+         try:
++            # Open device
+             usb0 = os.open(self._device, os.O_RDWR | os.O_NONBLOCK)
++            log.debug(f"Opened device: {self._device}")
++            
++            # Send command
++            self._send_command(usb0, full_command)
++            
++            # Receive response
++            response_line = self._receive_response(usb0)
++            
++            if not response_line:
++                raise TimeoutError("No response received from device")
++                
++            log.debug("usb response was: %s", response_line)
++            return response_line
++            
++        except OSError as e:
++            if e.errno == errno.ENOENT:
++                error_msg = f"Device not found: {self._device}"
++            elif e.errno == errno.EACCES:
++                error_msg = f"Permission denied accessing device: {self._device}"
++            elif e.errno == errno.EBUSY:
++                error_msg = f"Device busy: {self._device}"
++            else:
++                error_msg = f"USB device error: {e}"
++            log.error(error_msg)
++            raise OSError(error_msg) from e
++            
++        except TimeoutError as e:
++            log.error(f"Communication timeout: {e}")
++            raise
++            
+         except Exception as e:
+-            log.error("USB open error: {}".format(e))
+-            return {"ERROR": ["USB open error: {}".format(e), ""]}
+-        # Send the command to the open usb connection
++            error_msg = f"Unexpected error during communication: {e}"
++            log.error(error_msg)
++            raise OSError(error_msg) from e
++            
++        finally:
++            # Always close the device if it was opened
++            if usb0 is not None:
++                try:
++                    os.close(usb0)
++                    log.debug("Closed USB device")
++                except Exception as e:
++                    log.warning(f"Error closing USB device: {e}")
++
++    def _send_command(self, usb_fd: int, full_command: bytes) -> None:
++        """Send command to the USB device"""
+         cmd_len = len(full_command)
+-        log.debug(f"length of to_send: {cmd_len}")
+-        # for command of len < 8 it ok just to send
+-        # otherwise need to pack to a multiple of 8 bytes and send 8 at a time
+-        if cmd_len <= 8:
+-            # Send all at once
+-            log.debug("sending full_command in on shot")
+-            time.sleep(0.05)
+-            os.write(usb0, full_command)
+-        else:
+-            log.debug("multiple chunk send")
+-            chunks = [full_command[i:i + 8] for i in range(0, cmd_len, 8)]
+-            for chunk in chunks:
+-                # pad chunk to 8 bytes
+-                if len(chunk) < 8:
+-                    padding = 8 - len(chunk)
+-                    chunk += b'\x00' * padding
+-                log.debug("sending chunk: %s" % (chunk))
++        log.debug(f"Sending command of length: {cmd_len}")
++        
++        try:
++            if cmd_len <= 8:
++                # Send all at once
++                log.debug("Sending full_command in one shot")
+                 time.sleep(0.05)
+-                os.write(usb0, chunk)
+-        time.sleep(0.25)
+-        # Read from the usb connection
+-        # try to a max of 100 times
+-        for x in range(100):
+-            # attempt to deal with resource busy and other failures to read
++                os.write(usb_fd, full_command)
++            else:
++                # Send in 8-byte chunks
++                log.debug("Sending command in multiple chunks")
++                chunks = [full_command[i:i + 8] for i in range(0, cmd_len, 8)]
++                for chunk in chunks:
++                    # Pad chunk to 8 bytes
++                    if len(chunk) < 8:
++                        padding = 8 - len(chunk)
++                        chunk += b'\x00' * padding
++                    log.debug("Sending chunk: %s", chunk)
++                    time.sleep(0.05)
++                    os.write(usb_fd, chunk)
++                    
++            time.sleep(0.25)  # Wait for device to process
++            
++        except OSError as e:
++            raise OSError(f"Failed to send command: {e}") from e
++
++    def _receive_response(self, usb_fd: int) -> bytes:
++        """Receive response from the USB device with timeout handling"""
++        response_line = bytes()
++        start_time = time.time()
++        read_attempts = 0
++        max_read_attempts = 100
++        
++        log.debug(f"Starting to read response (timeout: {self._timeout}s)")
++        
++        while read_attempts < max_read_attempts:
++            # Check for overall timeout
++            if time.time() - start_time > self._timeout:
++                raise TimeoutError(f"Overall timeout ({self._timeout}s) exceeded while reading response")
++            
+             try:
+                 time.sleep(0.15)
+-                r = os.read(usb0, 256)
+-                response_line += r
+-            except Exception as e:
+-                log.debug("USB read error: {}".format(e))
+-            # Finished is \r is in byte_response
+-            if bytes([13]) in response_line:
+-                # remove anything after the \r
+-                response_line = response_line[: response_line.find(bytes([13])) + 1]
+-                break
+-        log.debug("usb response was: %s", response_line)
+-        os.close(usb0)
++                r = os.read(usb_fd, 256)
++                if r:  # Only add if we got data
++                    response_line += r
++                    log.debug(f"Read {len(r)} bytes, total: {len(response_line)}")
++                
++                # Check if we have a complete response (ends with \r)
++                if bytes([13]) in response_line:
++                    # Remove anything after the \r
++                    response_line = response_line[:response_line.find(bytes([13])) + 1]
++                    log.debug("Complete response received")
++                    break
++                    
++            except OSError as e:
++                if e.errno == errno.EAGAIN or e.errno == errno.EWOULDBLOCK:
++                    # No data available, this is expected with non-blocking I/O
++                    log.debug("No data available (EAGAIN/EWOULDBLOCK)")
++                elif e.errno == errno.ETIMEDOUT or e.errno == 110:  # 110 is ETIMEDOUT on some systems
++                    raise TimeoutError(f"Read operation timed out: {e}") from e
++                else:
++                    log.debug(f"USB read error: {e}")
++                    # For other errors, we might want to continue trying
++                    
++            read_attempts += 1
++        
++        if read_attempts >= max_read_attempts:
++            raise TimeoutError(f"Maximum read attempts ({max_read_attempts}) exceeded")
++            
++        if not response_line:
++            raise TimeoutError("No response received from device")
++            
+         return response_line
+diff --git a/mppsolar/libs/mqtt_manager.py b/mppsolar/libs/mqtt_manager.py
+new file mode 100644
+index 0000000..854aadd
+--- /dev/null
++++ b/mppsolar/libs/mqtt_manager.py
+@@ -0,0 +1,405 @@
++import logging
++import threading
++import hashlib
++import time
++import re
++import socket
++from typing import Dict, List, Optional, Callable, Any
++from dataclasses import dataclass, field
++from queue import Queue, Empty
++import json
++
++import paho.mqtt.client as mqtt_client
++
++log = logging.getLogger("mqtt_manager")
++
++
++@dataclass
++class BrokerConfig:
++    """Configuration for a single MQTT broker"""
++    name: str
++    port: int = 1883
++    username: Optional[str] = None
++    password: Optional[str] = None
++    keepalive: int = 60
++    clean_session: bool = False
++
++    def __hash__(self):
++        return hash((self.name, self.port, self.username))
++
++
++@dataclass
++class DeviceConfig:
++    """Configuration for a device section"""
++    device_name: str
++    section_name: str
++    broker_config: BrokerConfig
++    results_topic: Optional[str] = None
++    allowed_commands: List[str] = field(default_factory=list)
++    command_callback: Optional[Callable] = None
++
++    def __post_init__(self):
++        # Compile regex patterns for allowed commands
++        self.allowed_cmd_patterns = []
++        for cmd in self.allowed_commands:
++            try:
++                self.allowed_cmd_patterns.append(re.compile(cmd))
++            except re.error as e:
++                log.warning(f"Invalid regex pattern '{cmd}': {e}")
++
++
++class MqttConnection:
++    """Manages a single MQTT broker connection with threading support"""
++
++    def __init__(self, broker_config: BrokerConfig):
++        self.config = broker_config
++#         self.client = mqtt_client.Client(clean_session=broker_config.clean_session)
++        client_id = self._generate_client_id()
++        self.client = mqtt_client.Client(
++            client_id=client_id,
++            clean_session=broker_config.clean_session
++        )
++        self.connected = False
++        self.reconnect_delay = 5
++        self.max_reconnect_delay = 300
++        self.current_reconnect_delay = self.reconnect_delay
++        self.should_stop = threading.Event()
++        self.connection_thread = None
++        self.publish_queue = Queue()
++        self.publish_thread = None
++        self.devices = {}  # device_name -> DeviceConfig
++
++        # Setup client callbacks
++        self.client.on_connect = self._on_connect
++        self.client.on_disconnect = self._on_disconnect
++        self.client.on_message = self._on_message
++        self.client.on_publish = self._on_publish
++
++        # Setup authentication if provided
++        if broker_config.username:
++            self.client.username_pw_set(broker_config.username, broker_config.password)
++
++    def _generate_client_id(self) -> str:
++        """Generate a consistent client ID based on broker config and hostname"""
++        hostname = self._get_hostname()
++
++        # Create a string that uniquely identifies this connection
++        connection_string = f"{hostname}:{self.config.name}:{self.config.port}"
++        if self.config.username:
++            connection_string += f":{self.config.username}"
++
++        # Generate a hash for consistency
++        hash_obj = hashlib.md5(connection_string.encode('utf-8'))
++        hash_hex = hash_obj.hexdigest()[:8]  # Use first 8 chars for brevity
++
++        # Create client ID with hostname prefix for readability
++        client_id = f"mppsolar_{hostname}_{hash_hex}"
++
++        log.debug(f"Generated client ID: {client_id} for connection: {connection_string}")
++        return client_id
++
++
++    def _get_hostname(self) -> str:
++        """Get short hostname for topic structure"""
++        try:
++            return socket.gethostname().split('.')[0]
++        except:
++            return "mppsolar"
++
++    def add_device(self, device_config: DeviceConfig):
++        """Add a device configuration to this connection"""
++        self.devices[device_config.device_name] = device_config
++        if self.connected and device_config.allowed_commands:
++            self._subscribe_to_commands(device_config)
++
++    def _subscribe_to_commands(self, device_config: DeviceConfig):
++        """Subscribe to command topics for a device"""
++        if not device_config.allowed_commands:
++            return
++
++        hostname = self._get_hostname()
++        cmd_topic = f"{hostname}/{device_config.device_name}/cmd"
++        log.info(f"Subscribing to command topic: {cmd_topic}")
++        self.client.subscribe(cmd_topic, qos=1)
++
++    def _on_connect(self, client, userdata, flags, rc):
++        """Callback for when client connects to broker"""
++        connection_results = {
++            0: "Connection successful",
++            1: "Connection refused - incorrect protocol version",
++            2: "Connection refused - invalid client identifier",
++            3: "Connection refused - server unavailable",
++            4: "Connection refused - bad username or password",
++            5: "Connection refused - not authorised"
++        }
++
++        result_msg = connection_results.get(rc, f"Unknown result code: {rc}")
++        log.info(f"MQTT connection to {self.config.name}:{self.config.port} - {result_msg}")
++
++        if rc == 0:
++            self.connected = True
++            self.current_reconnect_delay = self.reconnect_delay
++
++            # Subscribe to command topics for all devices
++            for device_config in self.devices.values():
++                self._subscribe_to_commands(device_config)
++        else:
++            self.connected = False
++
++    def _on_disconnect(self, client, userdata, rc):
++        """Callback for when client disconnects from broker"""
++        self.connected = False
++        if rc != 0:
++            log.warning(f"Unexpected MQTT disconnection from {self.config.name}. RC: {rc}")
++
++    def _on_message(self, client, userdata, msg):
++        """Handle incoming MQTT messages"""
++        try:
++            topic_parts = msg.topic.split('/')
++            if len(topic_parts) >= 3 and topic_parts[-1] == 'cmd':
++                hostname = topic_parts[0]
++                device_name = topic_parts[1]
++
++                # Find matching device
++                device_config = self.devices.get(device_name)
++                if not device_config:
++                    log.warning(f"Received command for unknown device: {device_name}")
++                    return
++
++                command = msg.payload.decode('utf-8').strip()
++                log.info(f"Received command '{command}' for device '{device_name}'")
++
++                # Check if command is allowed
++                if not self._is_command_allowed(command, device_config):
++                    log.warning(f"Command '{command}' not allowed for device '{device_name}'")
++                    error_response = {
++                        "error": "Command not allowed",
++                        "command": command,
++                        "timestamp": time.time()
++                    }
++                    self._send_command_response(hostname, device_name, error_response)
++                    return
++
++                # Execute command if callback is available
++                if device_config.command_callback:
++                    try:
++                        result = device_config.command_callback(device_name, command)
++                        self._send_command_response(hostname, device_name, result)
++                    except Exception as e:
++                        log.error(f"Error executing command '{command}': {e}")
++                        error_response = {
++                            "error": str(e),
++                            "command": command,
++                            "timestamp": time.time()
++                        }
++                        self._send_command_response(hostname, device_name, error_response)
++        except Exception as e:
++            log.error(f"Error processing message: {e}")
++
++    def _is_command_allowed(self, command: str, device_config: DeviceConfig) -> bool:
++        """Check if command matches any allowed patterns"""
++        if not device_config.allowed_cmd_patterns:
++            return False
++
++        for pattern in device_config.allowed_cmd_patterns:
++            if pattern.match(command):
++                return True
++        return False
++
++    def _send_command_response(self, hostname: str, device_name: str, response: Any):
++        """Send command response to the response topic"""
++        response_topic = f"{hostname}/{device_name}/cmd_response"
++
++        if isinstance(response, dict):
++            payload = json.dumps(response)
++        else:
++            payload = str(response)
++        log.debug(f"Sending command response with QoS=1, retain=True to topic: {response_topic}")
++        self.publish(response_topic, payload, qos=1, retain=True)
++
++    def _on_publish(self, client, userdata, mid):
++        """Callback for when message is published"""
++        log.debug(f"Message {mid} published successfully")
++
++    def start(self):
++        """Start the connection and background threads"""
++        if self.connection_thread and self.connection_thread.is_alive():
++            return
++
++        self.should_stop.clear()
++        self.connection_thread = threading.Thread(target=self._connection_loop, daemon=True)
++        self.connection_thread.start()
++        self.publish_thread = threading.Thread(target=self._publish_loop, daemon=True)
++        self.publish_thread.start()
++        log.info(f"Started MQTT connection manager for {self.config.name}:{self.config.port}")
++
++    def stop(self):
++        """Stop the connection and all background threads"""
++        log.info(f"Stopping MQTT connection to {self.config.name}:{self.config.port}")
++        self.should_stop.set()
++
++        if self.connected:
++            self.client.disconnect()
++
++        if self.connection_thread and self.connection_thread.is_alive():
++            self.connection_thread.join(timeout=5)
++
++        if self.publish_thread and self.publish_thread.is_alive():
++            self.publish_thread.join(timeout=5)
++
++    def _connection_loop(self):
++        """Main connection management loop"""
++        while not self.should_stop.is_set():
++            if not self.connected:
++                try:
++                    log.info(f"Attempting to connect to {self.config.name}:{self.config.port}")
++                    self.client.connect(self.config.name, self.config.port, self.config.keepalive)
++                    self.client.loop_start()
++
++                    # Wait for connection or timeout
++                    start_time = time.time()
++                    while not self.connected and (time.time() - start_time) < 10:
++                        if self.should_stop.is_set():
++                            return
++                        time.sleep(0.1)
++
++                    if not self.connected:
++                        log.warning(f"Connection timeout to {self.config.name}:{self.config.port}")
++                        self._handle_connection_failure()
++
++                except Exception as e:
++                    log.error(f"Connection error to {self.config.name}:{self.config.port}: {e}")
++                    self._handle_connection_failure()
++            else:
++                # Keep connection alive
++                time.sleep(1)
++
++    def _handle_connection_failure(self):
++        """Handle connection failure with exponential backoff"""
++        log.warning(f"Waiting {self.current_reconnect_delay}s before reconnecting to {self.config.name}")
++        time.sleep(self.current_reconnect_delay)
++
++        self.current_reconnect_delay = min(self.current_reconnect_delay * 2, self.max_reconnect_delay)
++
++    def _publish_loop(self):
++        """Background thread for publishing queued messages"""
++        while not self.should_stop.is_set():
++            try:
++                # Get message from queue with timeout
++                msg_data = self.publish_queue.get(timeout=1)
++
++                if self.connected:
++                    topic = msg_data['topic']
++                    payload = msg_data['payload']
++                    # FIXED: Use direct dictionary access instead of .get() with defaults
++                    # This preserves the QoS and retain values that were explicitly set
++                    qos = msg_data['qos']
++                    retain = msg_data['retain']
++
++                    log.debug(f"Publishing to {topic} with QoS={qos}, retain={retain}")
++                    result = self.client.publish(topic, payload, qos=qos, retain=retain)
++                    if result.rc != mqtt_client.MQTT_ERR_SUCCESS:
++                        log.warning(f"Failed to publish to {topic}: {result.rc}")
++                    else:
++                        if isinstance(payload, (bytes, str)):
++                            preview = payload[:100]
++                        else:
++                            preview = str(payload)[:100]
++                        log.debug(f"Published to {topic}: {preview}… (QoS={qos}, retain={retain})")
++                else:
++                    log.warning(f"Cannot publish to {msg_data['topic']} - not connected")
++
++            except Empty:
++                continue
++            except KeyError as e:
++                log.error(f"Missing required key in message data: {e}")
++            except Exception as e:
++                log.error(f"Error in publish loop: {e}")
++
++    def publish(self, topic: str, payload: str, qos: int = 0, retain: bool = False):
++        """Queue a message for publishing"""
++        msg_data = {
++            'topic': topic,
++            'payload': payload,
++            'qos': qos,
++            'retain': retain
++        }
++        log.debug(f"Queuing message for {topic} with QoS={qos}, retain={retain}")
++        self.publish_queue.put(msg_data)
++
++    def publish_multiple(self, messages: List[Dict[str, Any]]):
++        """Queue multiple messages for publishing"""
++        for msg in messages:
++            topic = msg['topic']
++            payload = msg['payload']
++            qos = msg.get('qos', 0)
++            retain = msg.get('retain', False)
++            self.publish(topic, payload, qos, retain)
++
++
++class MqttManager:
++    """Central manager for all MQTT connections and devices"""
++
++    def __init__(self):
++        self.connections: Dict[str, MqttConnection] = {}
++        self.device_to_connection: Dict[str, MqttConnection] = {}
++        self.running = False
++
++    def _get_broker_key(self, broker_config: BrokerConfig) -> str:
++        """Generate unique key for broker configuration"""
++        return f"{broker_config.name}:{broker_config.port}:{broker_config.username or 'anonymous'}"
++
++    def add_device(self, device_config: DeviceConfig) -> MqttConnection:
++        """Add a device and return the associated connection"""
++        broker_key = self._get_broker_key(device_config.broker_config)
++
++        # Create connection if it doesn't exist
++        if broker_key not in self.connections:
++            connection = MqttConnection(device_config.broker_config)
++            self.connections[broker_key] = connection
++            if self.running:
++                connection.start()
++
++        connection = self.connections[broker_key]
++        connection.add_device(device_config)
++        self.device_to_connection[device_config.device_name] = connection
++
++        return connection
++
++    def get_connection_for_device(self, device_name: str) -> Optional[MqttConnection]:
++        """Get the MQTT connection for a specific device"""
++        return self.device_to_connection.get(device_name)
++
++    def start_all(self):
++        """Start all MQTT connections"""
++        self.running = True
++        for connection in self.connections.values():
++            connection.start()
++        log.info(f"Started {len(self.connections)} MQTT connections")
++
++    def stop_all(self):
++        """Stop all MQTT connections"""
++        self.running = False
++        for connection in self.connections.values():
++            connection.stop()
++        log.info("Stopped all MQTT connections")
++
++    def publish_to_device(self, device_name: str, topic: str, payload: str, qos: int = 0, retain: bool = False):
++        """Publish message using the connection for a specific device"""
++        connection = self.get_connection_for_device(device_name)
++        if connection:
++            connection.publish(topic, payload, qos, retain)
++        else:
++            log.warning(f"No MQTT connection found for device: {device_name}")
++
++    def publish_multiple_to_device(self, device_name: str, messages: List[Dict[str, Any]]):
++        """Publish multiple messages using the connection for a specific device"""
++        connection = self.get_connection_for_device(device_name)
++        if connection:
++            connection.publish_multiple(messages)
++        else:
++            log.warning(f"No MQTT connection found for device: {device_name}")
++
++
++# Global instance
++mqtt_manager = MqttManager()
+diff --git a/mppsolar/libs/mqttbroker.py b/mppsolar/libs/mqttbroker.py
+deleted file mode 100644
+index 79cba0b..0000000
+--- a/mppsolar/libs/mqttbroker.py
++++ /dev/null
+@@ -1,95 +0,0 @@
+-import logging
+-from dataclasses import dataclass
+-from typing import Optional
+-
+-import paho.mqtt.client as mqtt_client
+-
+-# Set-up logger
+-log = logging.getLogger("mqttbroker")
+-
+-
+-@dataclass
+-class MqttBroker:
+-    name: str
+-    port: int = 1883
+-    username: Optional[str] = None
+-    password: Optional[str] = None
+-    results_topic: Optional[str] = None
+-    mqttc: mqtt_client.Client = mqtt_client.Client()
+-    _isConnected: bool = False
+-
+-    def on_connect(self, client, userdata, flags, rc):
+-        # 0: Connection successful
+-        # 1: Connection refused - incorrect protocol version
+-        # 2: Connection refused - invalid client identifier
+-        # 3: Connection refused - server unavailable
+-        # 4: Connection refused - bad username or password
+-        # 5: Connection refused - not authorised
+-        # 6-255: Currently unused.
+-        connection_result = [
+-            "Connection successful",
+-            "Connection refused - incorrect protocol version",
+-            "Connection refused - invalid client identifier",
+-            "Connection refused - server unavailable",
+-            "Connection refused - bad username or password",
+-            "Connection refused - not authorised",
+-        ]
+-        log.debug(
+-            f"MqttBroker connection returned result: {rc} {connection_result[rc]}"
+-        )
+-        if rc == 0:
+-            self._isConnected = True
+-            return
+-        self._isConnected = False
+-
+-    def on_disconnect(self, client, userdata, rc):
+-        log.error(f"Disconnection returned result: {rc}")
+-        self._isConnected = False
+-
+-    def connect(self):
+-
+-        self.mqttc.on_connect = self.on_connect
+-        self.mqttc.on_disconnect = self.on_disconnect
+-        # if a name is supplied, connect
+-        if self.name:
+-            self.mqttc.connect(self.name, self.port, keepalive=60)
+-
+-    def start(self):
+-        if self._isConnected:
+-            self.mqttc.loop_start()
+-
+-    def stop(self):
+-        if self.name:
+-            self.mqttc.loop_stop()
+-            if self._isConnected:
+-                self.mqttc.disconnect
+-
+-    def set(self, variable, value):
+-        setattr(self, variable, value)
+-
+-    def update(self, variable, value):
+-        # only override if value is not None
+-        if value is None:
+-            return
+-        setattr(self, variable, value)
+-
+-    def subscribe(self, topic, callback):
+-        # subscribe to mqtt topic
+-        if not self.name:
+-            return
+-        # check if connected, connect if not
+-        if not self._isConnected:
+-            log.debug("Not connected, connecting")
+-            self.connect
+-        # Register callback
+-        self.mqttc.on_message = callback
+-        if self._isConnected:
+-            # Subscribe to command topic
+-            self.mqttc.subscribe(topic, qos=0)
+-
+-
+-if __name__ == "__main__":
+-    broker = MqttBroker("brokername")
+-    print(broker)
+-    broker.name = "test1"
+-    print(broker)
+diff --git a/mppsolar/libs/mqttbroker_legacy.py b/mppsolar/libs/mqttbroker_legacy.py
+new file mode 100644
+index 0000000..b35803f
+--- /dev/null
++++ b/mppsolar/libs/mqttbroker_legacy.py
+@@ -0,0 +1,145 @@
++import logging
++from typing import Optional, Dict, Any, List
++from .mqtt_manager import mqtt_manager, BrokerConfig, DeviceConfig
++
++log = logging.getLogger("mqttbroker_legacy")
++
++
++class MqttBroker:
++    """Legacy wrapper for the new threaded MQTT manager"""
++
++    def __str__(self):
++        if self.enabled:
++            return f"MqttBroker name: {self.name}, port: {self.port}, user: {self.username}"
++        else:
++            return "MqttBroker DISABLED"
++
++    def __init__(self, config=None):
++        self.config = config or {}
++        log.debug(f"mqttbroker config: {config}")
++
++        self.name = self.config.get("name")
++
++        try:
++            _port = self.config.get("port", 1883)
++            self.port = int(_port)
++        except ValueError:
++            log.info(f"Unable to process port: '{_port}', defaulting to 1883")
++            self.port = 1883
++
++        self.username = self.config.get("user")
++        self.password = self.config.get("pass")
++        self.results_topic = None
++
++        # Legacy compatibility
++        self._isConnected = False
++        self.enabled = self.name is not None
++
++        # Internal tracking
++        self._device_name = None
++        self._connection = None
++
++    def set(self, variable, value):
++        """Set attribute value"""
++        setattr(self, variable, value)
++
++    def update(self, variable, value):
++        """Update attribute only if value is not None"""
++        if value is None:
++            return
++        setattr(self, variable, value)
++
++    def connect(self):
++        """Legacy connect method - now handled automatically by manager"""
++        if not self.enabled:
++            log.info(f"MQTT broker not enabled, was a broker name defined? '{self.name}'")
++            return
++
++        log.debug(f"Legacy connect called for {self.name}:{self.port}")
++        # Connection is now managed automatically by the manager
++
++    def start(self):
++        """Legacy start method"""
++        pass  # Handled by manager
++
++    def stop(self):
++        """Legacy stop method"""
++        pass  # Handled by manager
++
++    def subscribe(self, topic, callback):
++        """Legacy subscribe method - not implemented in threaded version"""
++        log.warning("Legacy subscribe method called - use command callbacks instead")
++
++    def _ensure_connection(self, device_name: str = None, allowed_commands: List[str] = None,
++                          command_callback = None) -> bool:
++        """Ensure we have a connection set up for this broker/device combo"""
++        if not self.enabled:
++            return False
++
++        if device_name is None:
++            device_name = getattr(self, '_device_name', 'default')
++
++        # Check if we already have a connection for this device
++        connection = mqtt_manager.get_connection_for_device(device_name)
++        if connection:
++            self._connection = connection
++            return True
++
++        # Create broker and device config
++        broker_config = BrokerConfig(
++            name=self.name,
++            port=self.port,
++            username=self.username,
++            password=self.password
++        )
++
++        device_config = DeviceConfig(
++            device_name=device_name,
++            section_name=device_name,
++            broker_config=broker_config,
++            results_topic=self.results_topic,
++            allowed_commands=allowed_commands or [],
++            command_callback=command_callback
++        )
++
++        # Add to manager
++        self._connection = mqtt_manager.add_device(device_config)
++        self._device_name = device_name
++        return True
++
++    def publish(self, topic: str, payload: str, qos: int = 0, retain: bool = False,
++                device_name: str = None):
++        """Publish a single message"""
++        if self.name == "screen":
++            print(f"mqtt debug output only as broker name is 'screen' - topic: '{topic}', payload: '{payload}'")
++            return
++
++        if not self._ensure_connection(device_name):
++            log.warning("Cannot publish - no connection available")
++            return
++
++        self._connection.publish(topic, payload, qos, retain)
++
++    def publishMultiple(self, data: List[Dict[str, Any]], device_name: str = None):
++        """Publish multiple messages"""
++        if self.name == "screen":
++            for msg in data:
++                print(f"mqtt debug output only as broker name is 'screen' - topic: '{msg['topic']}', payload: '{msg['payload']}'")
++            return
++
++        if not self._ensure_connection(device_name):
++            log.warning("Cannot publish multiple - no connection available")
++            return
++
++        self._connection.publish_multiple(data)
++
++    def setup_device_commands(self, device_name: str, allowed_commands: List[str],
++                            command_callback = None):
++        """Set up command handling for a specific device"""
++        self._ensure_connection(device_name, allowed_commands, command_callback)
++
++
++# Legacy compatibility - maintain the old interface
++class MqttBrokerC(MqttBroker):
++    """Alias for backwards compatibility"""
++    pass
+diff --git a/mppsolar/libs/mqttbrokerc.py b/mppsolar/libs/mqttbrokerc.py
+deleted file mode 100644
+index 322c569..0000000
+--- a/mppsolar/libs/mqttbrokerc.py
++++ /dev/null
+@@ -1,186 +0,0 @@
+-import logging
+-from time import sleep
+-
+-import paho.mqtt.client as mqtt_client
+-
+-# Set-up logger
+-log = logging.getLogger("mqttbroker")
+-
+-
+-class MqttBroker:
+-    def __str__(self):
+-        if self.enabled:
+-            return f"MqttBroker name: {self.name}, port: {self.port}, user: {self.username}"
+-        else:
+-            return "MqttBroker DISABLED"
+-
+-    def __init__(self, config=None):
+-
+-        # mqttbroker:
+-        #     name: localhost
+-        #     port: 1883
+-        #     user: null
+-        #     pass: null
+-        #     adhoc_commands:
+-        #     topic: test/command_topic
+-        self.config = config
+-        if config is None:
+-            config = {}
+-        log.debug(f"mqttbroker config: {config}")
+-        self.name = config.get("name")
+-        try:
+-            _port = config.get("port", 1883)
+-            self.port = int(_port)
+-        except ValueError:
+-            log.info(f"Unable to process port: '{_port}', defaulting to 1883")
+-            self.port = 1883
+-
+-        self.username = config.get("user")
+-        self.password = config.get("pass")
+-        self._isConnected = False
+-        if self.name is None:
+-            self.enabled = False
+-        else:
+-            self.mqttc = mqtt_client.Client()
+-            self.enabled = True
+-            self._isConnected = False
+-
+-    def on_connect(self, client, userdata, flags, rc):
+-        # 0: Connection successful
+-        # 1: Connection refused - incorrect protocol version
+-        # 2: Connection refused - invalid client identifier
+-        # 3: Connection refused - server unavailable
+-        # 4: Connection refused - bad username or password
+-        # 5: Connection refused - not authorised
+-        # 6-255: Currently unused.
+-        connection_result = [
+-            "Connection successful",
+-            "Connection refused - incorrect protocol version",
+-            "Connection refused - invalid client identifier",
+-            "Connection refused - server unavailable",
+-            "Connection refused - bad username or password",
+-            "Connection refused - not authorised",
+-        ]
+-        log.debug(f"MqttBroker connection returned result: {rc} {connection_result[rc]}")
+-        if rc == 0:
+-            self._isConnected = True
+-            return
+-        self._isConnected = False
+-
+-    def on_disconnect(self, client, userdata, rc):
+-        print(f"Disconnection returned result: {rc}")
+-        self._isConnected = False
+-
+-    def connect(self):
+-        if not self.enabled:
+-            log.info(f"MQTT broker not enabled, was a broker name defined? '{self.name}'")
+-            return
+-        if not self.name:
+-            log.info(f"MQTT did not connect as no broker name '{self.name}'")
+-            return
+-        self.mqttc.on_connect = self.on_connect
+-        self.mqttc.on_disconnect = self.on_disconnect
+-        # if name is screen just return without connecting
+-        if self.name == "screen":
+-            # allows checking of message formats
+-            return
+-        try:
+-            log.debug(f"Connecting to {self.name} on port {self.port}")
+-            if self.username:
+-                # auth = {"username": mqtt_user, "password": mqtt_pass}
+-                _password = "********" if self.password is not None else "None"
+-                log.info(f"Using mqtt authentication, username: {self.username}, password: {_password}")
+-                self.mqttc.username_pw_set(self.username, password=self.password)
+-            else:
+-                log.debug("No mqtt authentication used")
+-                # auth = None
+-            self.mqttc.connect(self.name, port=self.port, keepalive=60)
+-            self.mqttc.loop_start()
+-            sleep(1)
+-        except ConnectionRefusedError as exc:
+-            log.warning(f"{self.name} refused connection '{exc}'")
+-
+-    def start(self):
+-        if self._isConnected:
+-            self.mqttc.loop_start()
+-
+-    def stop(self):
+-        log.debug("Stopping mqttbroker connection")
+-        if self.name:
+-            self.mqttc.loop_stop()
+-            if self._isConnected:
+-                log.debug("Disconnecting from mqtt broker")
+-                self.mqttc.disconnect
+-
+-    def set(self, variable, value):
+-        setattr(self, variable, value)
+-
+-    def update(self, variable, value):
+-        # only override if value is not None
+-        if value is None:
+-            return
+-        setattr(self, variable, value)
+-
+-    def subscribe(self, topic, callback):
+-        # subscribe to mqtt topic
+-        if not self.name:
+-            return
+-        # check if connected, connect if not
+-        if not self._isConnected:
+-            log.debug("Not connected, connecting")
+-            self.connect()
+-        # Register callback
+-        self.mqttc.on_message = callback
+-        if self._isConnected:
+-            # Subscribe to command topic
+-            log.debug(f"Subscribing to topic {topic}")
+-            self.mqttc.subscribe(topic, qos=0)
+-        else:
+-            log.warning(f"Did not subscribe to topic {topic} as not connected to broker")
+-
+-    def publishMultiple(self, data):
+-        for msg in data:
+-            self.publish(msg["topic"], msg["payload"])
+-
+-    def publish(self, topic, payload):
+-        log.debug(f"Publishing '{payload}' to '{topic}'")
+-        if self.name == "screen":
+-            print(f"mqtt debug output only as broker name is 'screen' - topic: '{topic}', payload: '{payload}'")
+-            return
+-        # check if connected, connect if not
+-        if not self._isConnected:
+-            log.debug("Not connected, connecting")
+-            self.connect()
+-            sleep(1)
+-            if not self._isConnected:
+-                log.warning("mqtt broker did not connect")
+-                return
+-        try:
+-            infot = self.mqttc.publish(topic, payload)
+-            infot.wait_for_publish()
+-        except Exception as e:
+-            log.warning(str(e))
+-
+-
+-
+-# print("Connecting to "+args.host+" port: "+str(port))
+-# mqttc.connect(args.host, port, args.keepalive)
+-
+-# mqttc.loop_start()
+-
+-# for x in range (0, args.nummsgs):
+-#     msg_txt = '{"msgnum": "'+str(x)+'"}'
+-#     print("Publishing: "+msg_txt)
+-#     infot = mqttc.publish(args.topic, msg_txt, qos=args.qos)
+-#     infot.wait_for_publish()
+-
+-#     time.sleep(args.delay)
+-
+-# mqttc.disconnect()
+-
+-
+-if __name__ == "__main__":
+-    broker = MqttBroker("brokername")
+-    print(broker)
+-    broker.name = "test1"
+-    print(broker)
+diff --git a/mppsolar/main.py b/mppsolar/main.py
+index 57a0ea0..690f2ee 100644
+--- a/mppsolar/main.py
++++ b/mppsolar/main.py
+@@ -1,5 +1,6 @@
+ from mppsolar import main
+ 
+-
+ if __name__ == "__main__":
+     main()
++
++
+diff --git a/mppsolar/outputs/domoticz_autodiscover.py b/mppsolar/outputs/domoticz_autodiscover.py
+index decb73a..384e0be 100644
+--- a/mppsolar/outputs/domoticz_autodiscover.py
++++ b/mppsolar/outputs/domoticz_autodiscover.py
+@@ -71,3 +71,27 @@ class domoticz_autodiscover(mqtt):
+                 # msg = {"topic": state_topic, "payload": payload}
+                 # msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: domoticz_autodiscover")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"domoticz_autodiscover.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/domoticz_mqtt.py b/mppsolar/outputs/domoticz_mqtt.py
+index 414c3be..f2792e9 100644
+--- a/mppsolar/outputs/domoticz_mqtt.py
++++ b/mppsolar/outputs/domoticz_mqtt.py
+@@ -75,3 +75,27 @@ class domoticz_mqtt(mqtt):
+                 msg = {"topic": state_topic, "payload": payload}
+                 msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: domoticz_mqtt")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"domoticz_mqtt.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/hass_mqtt.py b/mppsolar/outputs/hass_mqtt.py
+index 198bfc9..c2dbac3 100644
+--- a/mppsolar/outputs/hass_mqtt.py
++++ b/mppsolar/outputs/hass_mqtt.py
+@@ -90,3 +90,27 @@ class hass_mqtt(mqtt):
+                     msg = {"topic": topic, "payload": value}
+                     msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: hass_mqtt")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"hass_mqtt.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/hassd_mqtt.py b/mppsolar/outputs/hassd_mqtt.py
+index 27c50e2..f21f81b 100644
+--- a/mppsolar/outputs/hassd_mqtt.py
++++ b/mppsolar/outputs/hassd_mqtt.py
+@@ -182,6 +182,9 @@ class hassd_mqtt(mqtt):
+         if data is None:
+             return
+ 
++        # Get device name for MQTT routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
+         # get the broker instance
+         mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
+         # exit if no broker
+@@ -194,6 +197,6 @@ class hassd_mqtt(mqtt):
+         log.debug(f"hassd_mqtt.output value_msgs {value_msgs}")
+ 
+         # publish
+-        mqtt_broker.publishMultiple(config_msgs)
++        mqtt_broker.publishMultiple(config_msgs, device_name=device_name)
+         sleep(0.5)
+-        mqtt_broker.publishMultiple(value_msgs)
++        mqtt_broker.publishMultiple(value_msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/influx2_mqtt.py b/mppsolar/outputs/influx2_mqtt.py
+index 97dcb15..c0506ad 100644
+--- a/mppsolar/outputs/influx2_mqtt.py
++++ b/mppsolar/outputs/influx2_mqtt.py
+@@ -59,3 +59,27 @@ class influx2_mqtt(mqtt):
+                     }
+                 msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: influx2_mqtt")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"influx2_mqtt.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/influx_mqtt.py b/mppsolar/outputs/influx_mqtt.py
+index 431f4db..2e2bc04 100644
+--- a/mppsolar/outputs/influx_mqtt.py
++++ b/mppsolar/outputs/influx_mqtt.py
+@@ -60,3 +60,27 @@ class influx_mqtt(mqtt):
+                     }
+                 msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: influx_mqtt")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"influx_mqtt.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/json_mqtt.py b/mppsolar/outputs/json_mqtt.py
+index 5394796..cdc0ad6 100644
+--- a/mppsolar/outputs/json_mqtt.py
++++ b/mppsolar/outputs/json_mqtt.py
+@@ -53,3 +53,27 @@ class json_mqtt(mqtt):
+         }
+         msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: json_mqtt")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"json_mqtt.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/mqtt.py b/mppsolar/outputs/mqtt.py
+index b156997..e26a9b1 100644
+--- a/mppsolar/outputs/mqtt.py
++++ b/mppsolar/outputs/mqtt.py
+@@ -101,9 +101,12 @@ class mqtt(baseoutput):
+         if mqtt_broker is None:
+             return
+ 
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
+         # build the messages...
+         msgs = self.build_msgs(**kwargs)
+         log.debug(f"mqtt.output msgs {msgs}")
+ 
+         # publish
+-        mqtt_broker.publishMultiple(msgs)
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/outputs/prom.py b/mppsolar/outputs/prom.py
+index e5ee6cf..748ca62 100644
+--- a/mppsolar/outputs/prom.py
++++ b/mppsolar/outputs/prom.py
+@@ -36,7 +36,7 @@ class prom(baseoutput):
+             filter = config.get("filter", None)
+             excl_filter = config.get("excl_filter", None)
+             name = config.get("name", "mpp_solar")
+-            dev = config.get("dev", "None")
++            dev = config.get("dev", dev)
+         else:
+             # get formatting info
+             remove_spaces = True
+@@ -52,6 +52,10 @@ class prom(baseoutput):
+         if name == "unnamed":
+             name = "mpp_solar"
+ 
++
++        if dev is None:
++            dev = "None"
++
+         # remove raw response
+         data.pop("raw_response", None)
+         data.pop("_command_description", None)
+diff --git a/mppsolar/outputs/prom_file.py b/mppsolar/outputs/prom_file.py
+index 2769354..4dd6f7f 100644
+--- a/mppsolar/outputs/prom_file.py
++++ b/mppsolar/outputs/prom_file.py
+@@ -1,25 +1,113 @@
+ import logging
++import os
++import tempfile
++import atexit
+ 
+ from .prom import prom
+-from ..helpers import get_kwargs
++from ..helpers import get_kwargs, is_daemon_mode
+ 
+ log = logging.getLogger("prom")
+ 
+ 
+ class prom_file(prom):
+     prom_output_dir = ""
++    # Class variable to track all created files for cleanup
++    _created_files = set()
++    _cleanup_registered = False
+ 
+     def __str__(self):
+-        return "pushes Node exporter Prometheus format to PushGateway"
++        return "Node exporter Prometheus format to files for NodeExporter consumption"
++
++    @classmethod
++    def _register_cleanup(cls):
++        """Register cleanup function once"""
++        if not cls._cleanup_registered:
++            atexit.register(cls._cleanup_all_files)
++            cls._cleanup_registered = True
++
++    @classmethod
++    def _cleanup_all_files(cls):
++        log.info("Cleaning up prometheus files...")
++        removed = 0
++        for file_path in cls._created_files.copy():
++            try:
++                if os.path.exists(file_path):
++                    os.remove(file_path)
++                    removed += 1
++                    log.debug(f"Removed prometheus file: {file_path}")
++                cls._created_files.discard(file_path)
++            except Exception as e:
++                log.warning(f"Failed to remove prometheus file {file_path}: {e}")
++        log.info(f"Cleanup complete, {removed} prometheus files removed.")
++
++    @classmethod
++    def cleanup_file(cls, file_path):
++        """Remove a specific file and track it for cleanup"""
++        try:
++            if os.path.exists(file_path):
++                os.remove(file_path)
++                log.debug(f"Removed prometheus file: {file_path}")
++            cls._created_files.discard(file_path)
++        except Exception as e:
++            log.warning(f"Failed to remove prometheus file {file_path}: {e}")
+ 
+     def output(self, *args, **kwargs):
+         # We override the method only to get the PushGateway URL from the config
+         self.prom_output_dir = kwargs["prom_output_dir"]
+         self.cmd = get_kwargs(kwargs, "data").get("_command", "").lower()
++        self.name = get_kwargs(kwargs, "name")
++
+ 
+         return super().output(*args, **kwargs)
+ 
+     def handle_output(self, content: str) -> None:
+-        file_path = f"{self.prom_output_dir.rstrip('/')}/mpp-solar-{self.cmd}.prom"
+-        with open(file_path, "w") as f:
+-            f.write(content)
++        if self.name != "unnamed":
++            self.filename = "{0}-{1}".format(self.name, self.cmd)
++        else:
++            self.filename = self.cmd
++
++        file_path = f"{self.prom_output_dir.rstrip('/')}/mpp-solar-{self.filename}.prom"
++
++        # Ensure output directory exists
++        os.makedirs(self.prom_output_dir, exist_ok=True)
++
++        try:
++            # Create temporary file in the same directory as the target file
++            # This ensures atomic move works (same filesystem)
++            temp_fd, temp_path = tempfile.mkstemp(
++                suffix='.tmp',
++                prefix=f'mpp-solar-{self.filename}_',
++                dir=self.prom_output_dir
++            )
++
++            try:
++                # Write content to temporary file
++                with os.fdopen(temp_fd, 'w') as temp_file:
++                    temp_file.write(content)
++                    temp_file.flush()
++                    os.fsync(temp_file.fileno())  # Force write to disk
++                    os.chmod(temp_path, 0o744)
++
++                # Atomically move temp file to final location
++                os.rename(temp_path, file_path)
++
++                # Track these files for cleanup if daemon
++                log.debug(f"is_daemon_mode(): {is_daemon_mode()}")
++                if is_daemon_mode():
++                    prom_file._created_files.add(file_path)
++                    prom_file._register_cleanup()
++                    log.debug(f"DAEMON_MODE - Registering PROM files for cleanup on exit.")
++
++                log.debug(f"Successfully wrote prometheus file: {file_path}")
++
++            except Exception as e:
++                # Clean up temp file if something went wrong
++                try:
++                    os.unlink(temp_path)
++                except:
++                    pass
++                raise e
++
++        except Exception as e:
++            log.error(f"Failed to write prometheus file {file_path}: {e}")
++            raise
+diff --git a/mppsolar/outputs/prom_push.py b/mppsolar/outputs/prom_push.py
+index f10ecdd..51861ec 100644
+--- a/mppsolar/outputs/prom_push.py
++++ b/mppsolar/outputs/prom_push.py
+@@ -25,11 +25,15 @@ class prom_push(prom):
+         self.push_url = kwargs["push_url"]
+ 
+         return super().output(*args, **kwargs)
+-
++    
+     def handle_output(self, content: str) -> None:
+         if not requests:
+             return
+-
+-        with requests.post(self.push_url, data=content) as req:
+-            log.debug(f"POST'ed data to PushGateway {self.push_url!r}: {req=}")
+-    
+\ No newline at end of file
++    
++        headers = {'Content-Type': 'text/plain'}
++        try:
++            with requests.post(self.push_url, data=content, headers=headers, timeout=5) as req:
++                log.debug(f"POST'ed data to PushGateway {self.push_url!r}: status_code={req.status_code}")
++        except requests.RequestException as e:
++            log.error(f"Failed to push to PushGateway: {e}")
++    
+diff --git a/mppsolar/outputs/prom_pushd.py b/mppsolar/outputs/prom_pushd.py
+new file mode 100644
+index 0000000..dd7b613
+--- /dev/null
++++ b/mppsolar/outputs/prom_pushd.py
+@@ -0,0 +1,48 @@
++import logging
++import socket
++
++try:
++    import requests
++except ImportError:
++    print("You are missing dependencies in order to be able to use that output.")
++    print("To install them, use this command:")
++    print("    python -m pip install 'mppsolar[push]'")
++    requests = None
++
++from .prom import prom
++from ..helpers import get_kwargs
++
++log = logging.getLogger("prom")
++
++
++class prom_pushd(prom):
++    push_url = ""
++    job = "mppsolar"  # static default
++
++    def __str__(self):
++        return "Pushes Prometheus exposition format directly to VictoiaMetrics (Not Gateway)"
++
++    def output(self, *args, **kwargs):
++        log.debug(f"RAW kwargs: {kwargs}")
++        self.push_url = kwargs.get("push_url")
++        self.job = kwargs.get("job", "mppsolar")
++        # Fully ignore provided instance, always sanitize from hostname
++        self.instance = socket.gethostname().split('.')[0]
++
++        log.debug(f"Forced instance to short hostname: {self.instance}")
++        return super().output(*args, **kwargs)
++
++    def handle_output(self, content: str) -> None:
++        if not requests:
++            return
++
++        headers = {'Content-Type': 'text/plain'}
++        target_url = f"{self.push_url}/metrics/job/{self.job}/instance/{self.instance}"
++
++        try:
++            with requests.post(target_url, data=content, headers=headers, timeout=(2,10)) as req:
++                log.debug(f"POST'ed data to PushGateway {target_url!r}: status_code={req.status_code}")
++        except requests.RequestException as e:
++            log.error(f"Failed to push to PushGateway: {e}")
++
++    
+diff --git a/mppsolar/outputs/tag_mqtt.py b/mppsolar/outputs/tag_mqtt.py
+index 953e3dd..9e22568 100644
+--- a/mppsolar/outputs/tag_mqtt.py
++++ b/mppsolar/outputs/tag_mqtt.py
+@@ -55,3 +55,27 @@ class tag_mqtt(mqtt):
+                 }
+                 msgs.append(msg)
+         return msgs
++
++    def output(self, *args, **kwargs):
++        log.info("Using output processor: tag_mqtt")
++        log.debug(f"kwargs {kwargs}")
++        data = get_kwargs(kwargs, "data")
++        # exit if no data
++        if data is None:
++            return
++
++        # get the broker instance
++        mqtt_broker = get_kwargs(kwargs, "mqtt_broker")
++        # exit if no broker
++        if mqtt_broker is None:
++            return
++
++        # Get device name for routing
++        device_name = get_kwargs(kwargs, "name", "mppsolar")
++
++        # build the messages...
++        msgs = self.build_msgs(**kwargs)
++        log.debug(f"tag_mqtt.output msgs {msgs}")
++
++        # publish
++        mqtt_broker.publishMultiple(msgs, device_name=device_name)
+diff --git a/mppsolar/protocols/pi16.py b/mppsolar/protocols/pi16.py
+index eb28bf7..a98ca2d 100644
+--- a/mppsolar/protocols/pi16.py
++++ b/mppsolar/protocols/pi16.py
+@@ -134,15 +134,15 @@ COMMANDS = {
+         "type": "QUERY",
+         "response_type": "SEQUENTIAL",
+         "response": [
+-            ["float", "Grid voltage", "V"],
++            ["float", "AC Input Voltage", "V"],
+             ["int", "Output power", "W"],
+-            ["float", "Grid frequency", "Hz"],
++            ["float", "AC Input Frequency", "Hz"],
+             ["float", "Output current", "A"],
+-            ["float", "AC output voltage R", "V"],
+-            ["int", "AC output power R", "W"],
+-            ["float", "AC output frequency", "Hz"],
+-            ["float", "AC output current R", "A"],
+-            ["int", "Output load percent", "%"],
++            ["float", "AC Output Voltage R", "V"],
++            ["int", "AC Output Power R", "W"],
++            ["float", "AC Output Frequency", "Hz"],
++            ["float", "AC Output Current R", "A"],
++            ["int", "Output Load Percent", "%"],
+             ["float", "PBUS voltage", "V"],
+             ["float", "SBUS voltage", "V"],
+             ["float", "Positive battery voltage", "V"],
+@@ -180,9 +180,9 @@ COMMANDS = {
+         "type": "QUERY",
+         "response_type": "SEQUENTIAL",
+         "response": [
+-            ["float", "Grid Input Voltage Rating", "V"],
+-            ["float", "Grid Input Frequency Rating", "Hz"],
+-            ["float", "Grid Input Current Rating", "A"],
++            ["float", "AC Input Voltage Rating", "V"],
++            ["float", "AC Input Frequency Rating", "Hz"],
++            ["float", "AC Input Current Rating", "A"],
+             ["float", "AC Output Voltage Rating", "V"],
+             ["float", "AC Output Current Rating", "A"],
+             ["float", "Maximum input current per PV", "A"],
+diff --git a/mppsolar/protocols/pi17.py b/mppsolar/protocols/pi17.py
+index 126d9cc..aae82f7 100755
+--- a/mppsolar/protocols/pi17.py
++++ b/mppsolar/protocols/pi17.py
+@@ -189,13 +189,13 @@ QUERY_COMMANDS = {
+         "response_type": "SEQUENTIAL",
+         "type": "QUERY",
+         "response": [
+-            ["int:r/10", "AC input rated voltage", "V"],
+-            ["int:r/10", "AC input rated frequency", "Hz"],
+-            ["int:r/10", "AC input rated current", "A"],
+-            ["int:r/10", "AC output rated voltage", "V"],
+-            ["int:r/10", "AC output rated current", "A"],
+-            ["int:r/10", "MPPT rated current per string", "A"],
+-            ["int:r/10", "Battery rated voltage", "V"],
++            ["int:r/10", "AC input voltage rating", "V"],
++            ["int:r/10", "AC input frequency rating", "Hz"],
++            ["int:r/10", "AC input current rating", "A"],
++            ["int:r/10", "AC output voltage rating", "V"],
++            ["int:r/10", "AC output current rating", "A"],
++            ["int:r/10", "MPPT current per string rating", "A"],
++            ["int:r/10", "Battery voltage rating", "V"],
+             ["int", "MPPT track number", "ea"],
+             [
+                 "str_keyed",
+@@ -331,10 +331,10 @@ QUERY_COMMANDS = {
+             ["option", "Battery disconnected", ["disabled", "enabled"]],
+             ["option", "Battery over voltage", ["disabled", "enabled"]],
+             ["option", "Battery low in hybrid mode", ["disabled", "enabled"]],
+-            ["option", "Grid voltage high loss", ["disabled", "enabled"]],
+-            ["option", "Grid voltage low loss", ["disabled", "enabled"]],
+-            ["option", "Grid frequency high loss", ["disabled", "enabled"]],
+-            ["option", "Grid frequency low loss", ["disabled", "enabled"]],
++            ["option", "AC Input Voltage high loss", ["disabled", "enabled"]],
++            ["option", "AC Input Voltage low loss", ["disabled", "enabled"]],
++            ["option", "AC Input Frequency high loss", ["disabled", "enabled"]],
++            ["option", "AC Input Frequency low loss", ["disabled", "enabled"]],
+             ["option", "AC input long-time average voltage over", ["disabled", "enabled"]],
+             ["option", "AC input voltage loss", ["disabled", "enabled"]],
+             ["option", "AC input frequency loss", ["disabled", "enabled"]],
+diff --git a/mppsolar/protocols/pi18.py b/mppsolar/protocols/pi18.py
+index 26fcab7..a8dbcc2 100644
+--- a/mppsolar/protocols/pi18.py
++++ b/mppsolar/protocols/pi18.py
+@@ -21,7 +21,7 @@ COMMANDS = {
+     #    "T": {
+     #        "name": "T",
+     #        "prefix": "^P004",
+-    #        "description": "Queryy current time",
++    #        "description": "Query current time",
+     #        "help": " -- queries the device protocol version \n",
+     #    },
+     "ET": {
+@@ -139,19 +139,19 @@ COMMANDS = {
+         "help": " -- queries rated information",
+         "type": "QUERY",
+         "response": [
+-            ["10int", "AC input rated voltage", "V", {"icon": "mdi:power-plug", "device-class": "voltage"}],
+-            ["10int", "AC input rated current", "A", {"icon": "mdi:current-ac", "device-class": "current"}],
+-            ["10int", "AC output rated voltage", "V", {"icon": "mdi:power-plug", "device-class": "voltage"}],
+-            ["10int", "AC output rated frequency", "Hz", {"icon": "mdi:sine-wave", "device-class": "frequency"}],
+-            ["10int", "AC output rated current", "A", {"icon": "mdi:current-ac", "device-class": "current"}],
++            ["10int", "AC input voltage rating", "V", {"icon": "mdi:power-plug", "device-class": "voltage"}],
++            ["10int", "AC input current rating", "A", {"icon": "mdi:current-ac", "device-class": "current"}],
++            ["10int", "AC output voltage rating", "V", {"icon": "mdi:power-plug", "device-class": "voltage"}],
++            ["10int", "AC output frequency rating", "Hz", {"icon": "mdi:sine-wave", "device-class": "frequency"}],
++            ["10int", "AC output current rating", "A", {"icon": "mdi:current-ac", "device-class": "current"}],
+             [
+                 "int",
+                 "AC output rating apparent power",
+                 "VA",
+                 {"icon": "mdi:power-plug", "device-class": "apparent_power"},
+             ],
+-            ["int", "AC output rating active power", "W", {"icon": "mdi:power-plug", "device-class": "power"}],
+-            ["10int", "Battery rated voltage", "V", {"icon": "mdi:battery-outline", "device-class": "voltage"}],
++            ["int", "AC output active power rating", "W", {"icon": "mdi:power-plug", "device-class": "power"}],
++            ["10int", "Battery voltage rating", "V", {"icon": "mdi:battery-outline", "device-class": "voltage"}],
+             ["10int", "Battery re-charge voltage", "V", {"icon": "mdi:battery-outline", "device-class": "voltage"}],
+             ["10int", "Battery re-discharge voltage", "V", {"icon": "mdi:battery-outline", "device-class": "voltage"}],
+             ["10int", "Battery under voltage", "V", {"icon": "mdi:battery-outline", "device-class": "voltage"}],
+@@ -193,11 +193,11 @@ COMMANDS = {
+         "help": " -- Query general status information",
+         "type": "QUERY",
+         "response": [
+-            ["10int", "Grid voltage", "V", {"icon": "mdi:transmission-tower", "device-class": "voltage"}],
+-            ["10int", "Grid frequency", "Hz", {"icon": "mdi:sine-wave", "device-class": "frequency"}],
++            ["10int", "AC Input Voltage", "V", {"icon": "mdi:transmission-tower", "device-class": "voltage"}],
++            ["10int", "AC Input Frequency", "Hz", {"icon": "mdi:sine-wave", "device-class": "frequency"}],
+             [
+                 "10int",
+-                "AC output voltage",
++                "AC Output Voltage",
+                 "V",
+                 {"icon": "mdi:home-lightning-bolt-outline", "device-class": "voltage"},
+             ],
+diff --git a/mppsolar/protocols/pi18lvx.py b/mppsolar/protocols/pi18lvx.py
+index 8fd162f..27873b5 100644
+--- a/mppsolar/protocols/pi18lvx.py
++++ b/mppsolar/protocols/pi18lvx.py
+@@ -209,9 +209,9 @@ COMMANDS = {
+             ["option", "Parallel ID connection status", ["Not existent", "Existent"]],
+             ["int", "Work mode", ""],
+             ["int", "Fault code", ""],
+-            ["int", "Grid voltage", "0.1V"],
+-            ["int", "Grid frequency", "0.1HZ"],
+-            ["int", "AC output voltage", "0.1V"],
++            ["int", "AC Input Voltage", "0.1V"],
++            ["int", "AC Input Frequency", "0.1HZ"],
++            ["int", "AC Output Voltage", "0.1V"],
+             ["int", "AC output frequency", "0.1Hz"],
+             ["int", "AC output apparent power", "VA"],
+             ["int", "AC output active power", "W"],
+@@ -286,7 +286,7 @@ COMMANDS = {
+         "help": "",
+         "type": "QUERY",
+         "response": [
+-            ["int", "AC output voltage", "0.1V"],
++            ["int", "AC Output Voltage", "0.1V"],
+             ["int", "AC output frequency", "0.1Hz"],
+             ["option", "AC input voltage range", ["Appliance", "UPS"]],
+             ["int", "Battery Under voltage", "0.1V"],
+@@ -348,14 +348,14 @@ COMMANDS = {
+         "help": " -- queries rated information",
+         "type": "QUERY",
+         "response": [
+-            ["int", "AC input rated voltage", "0.1V"],
+-            ["int", "AC input rated current", "0.1A"],
+-            ["int", "AC output rated voltage", "0.1V"],
+-            ["int", "AC output rated frequency", "0.1HZ"],
+-            ["int", "AC output rated current", "0.1A"],
+-            ["int", "AC output rated apparent power", "1VA"],
+-            ["int", "AC output rated active power", "W"],
+-            ["int", "Battery rated voltage", "0.1V"],
++            ["int", "AC input voltage rating", "0.1V"],
++            ["int", "AC input current rating", "0.1A"],
++            ["int", "AC output voltage rating", "0.1V"],
++            ["int", "AC output frequency rating", "0.1HZ"],
++            ["int", "AC output current rating", "0.1A"],
++            ["int", "AC output apparent power rating", "1VA"],
++            ["int", "AC output active power rating", "W"],
++            ["int", "Battery voltage rating", "0.1V"],
+             ["int", "Battery recharge voltage", "0.1V"],
+             ["int", "Battery redischarge voltage", "0.1V"],
+             ["int", "Battery under voltage", "0.1V"],
+diff --git a/mppsolar/protocols/pi18sv.py b/mppsolar/protocols/pi18sv.py
+index 99ecb0e..bad3e70 100644
+--- a/mppsolar/protocols/pi18sv.py
++++ b/mppsolar/protocols/pi18sv.py
+@@ -209,15 +209,15 @@ COMMANDS = {
+             ["option", "Parallel ID connection status", ["Not existent", "Existent"]],
+             ["int", "Work mode", ""],
+             ["int", "Fault code", ""],
+-            ["int", "Grid voltage", "0.1V"],
+-            ["int", "Grid frequency", "0.1HZ"],
+-            ["int", "AC output voltage", "0.1V"],
+-            ["int", "AC output frequency", "0.1Hz"],
+-            ["int", "AC output apparent power", "VA"],
+-            ["int", "AC output active power", "W"],
+-            ["int", "Total AC output apparent power", "VA"],
+-            ["int", "Total AC output active power", "W"],
+-            ["int", "Output load percent", "%"],
++            ["int", "AC Input Voltage", "0.1V"],
++            ["int", "AC Input Frequency", "0.1HZ"],
++            ["int", "AC Output Voltage", "0.1V"],
++            ["int", "AC Output Frequency", "0.1Hz"],
++            ["int", "AC Output Apparent Power", "VA"],
++            ["int", "AC Output Active Power", "W"],
++            ["int", "AC Output Apparent Power Total", "VA"],
++            ["int", "AC Output Active Power Total", "W"],
++            ["int", "Output Load Percent", "%"],
+             ["int", "Total output load percent", "%"],
+             ["int", "Battery voltage", "0.1V"],
+             ["int", "Battery discharge current", "A"],
+@@ -286,9 +286,9 @@ COMMANDS = {
+         "help": "",
+         "type": "QUERY",
+         "response": [
+-            ["int", "AC output voltage", "0.1V"],
+-            ["int", "AC output frequency", "0.1Hz"],
+-            ["option", "AC input voltage range", ["Appliance", "UPS"]],
++            ["int", "AC Output Voltage", "0.1V"],
++            ["int", "AC Output Frequency", "0.1Hz"],
++            ["option", "AC Input Voltage Range", ["Appliance", "UPS"]],
+             ["int", "Battery Under voltage", "0.1V"],
+             ["int", "Charging float voltage", "0.1V"],
+             ["int", "Charging bulk voltage", "0.1V"],
+diff --git a/mppsolar/protocols/pi30.py b/mppsolar/protocols/pi30.py
+index 114bbb5..22b9dbe 100644
+--- a/mppsolar/protocols/pi30.py
++++ b/mppsolar/protocols/pi30.py
+@@ -631,21 +631,21 @@ QUERY_COMMANDS = {
+                     "86": "Parallel output setting different",
+                 },
+             ],
+-            ["float", "Grid voltage", "V"],
+-            ["float", "Grid frequency", "Hz"],
+-            ["float", "AC output voltage", "V"],
+-            ["float", "AC output frequency", "Hz"],
+-            ["int", "AC output apparent power", "VA"],
+-            ["int", "AC output active power", "W"],
+-            ["int", "Load percentage", "%"],
+-            ["float", "Battery voltage", "V"],
+-            ["int", "Battery charging current", "A"],
+-            ["int", "Battery capacity", "%"],
+-            ["float", "PV Input Voltage", "V"],
+-            ["int", "Total charging current", "A"],
+-            ["int", "Total AC output apparent power", "VA"],
+-            ["int", "Total output active power", "W"],
+-            ["int", "Total AC output percentage", "%"],
++            ["float", "AC Input Voltage", "V"],
++            ["float", "AC Input Frequency", "Hz"],
++            ["float", "AC Output Voltage", "V"],
++            ["float", "AC Output Frequency", "Hz"],
++            ["int", "AC Output Apparent Power", "VA"],
++            ["int", "AC Output Active Power", "W"],
++            ["int", "Load Percentage", "%"],
++            ["float", "Battery Voltage", "V"],
++            ["int", "Battery Charging Current", "A"],
++            ["int", "Battery Capacity", "%"],
++            ["float", "PV1 Input Voltage", "V"],
++            ["int", "Total Charging Current", "A"],
++            ["int", "Total AC Output Apparent Power", "VA"],
++            ["int", "Total Output Active Power", "W"],
++            ["int", "Total AC Output Percentage", "%"],
+             [
+                 "flags",
+                 "Inverter Status",
+@@ -679,11 +679,11 @@ QUERY_COMMANDS = {
+                 "Charger source priority",
+                 ["Utility first", "Solar first", "Solar + Utility", "Solar only"],
+             ],
+-            ["int", "Max charger current", "A"],
+-            ["int", "Max charger range", "A"],
+-            ["int", "Max AC charger current", "A"],
+-            ["int", "PV input current", "A"],
+-            ["int", "Battery discharge current", "A"],
++            ["int", "Max Charger Current", "A"],
++            ["int", "Max Charger Range", "A"],
++            ["int", "Max AC Charger Current", "A"],
++            ["int", "PV1 Input Current", "A"],
++            ["int", "Battery Discharge Current", "A"],
+             ["float", "Unknown float", ""],
+             ["string", "Unknown flags?", ""],
+         ],
+@@ -765,14 +765,14 @@ QUERY_COMMANDS = {
+         "type": "QUERY",
+         "response_type": "SEQUENTIAL",
+         "response": [
+-            ["float", "AC Input Voltage", "V"],
+-            ["float", "AC Input Current", "A"],
+-            ["float", "AC Output Voltage", "V"],
+-            ["float", "AC Output Frequency", "Hz"],
+-            ["float", "AC Output Current", "A"],
+-            ["int", "AC Output Apparent Power", "VA"],
+-            ["int", "AC Output Active Power", "W"],
+-            ["float", "Battery Voltage", "V"],
++            ["float", "AC Input Voltage Rating", "V"],
++            ["float", "AC Input Current Rating", "A"],
++            ["float", "AC Output Voltage Rating", "V"],
++            ["float", "AC Output Frequency Rating", "Hz"],
++            ["float", "AC Output Current Rating", "A"],
++            ["int", "AC Output Apparent Power Rating", "VA"],
++            ["int", "AC Output Active Power Rating", "W"],
++            ["float", "Battery Voltage Rating", "V"],
+             ["float", "Battery Recharge Voltage", "V"],
+             ["float", "Battery Under Voltage", "V"],
+             ["float", "Battery Bulk Charge Voltage", "V"],
+diff --git a/mppsolar/protocols/pi30m044.py b/mppsolar/protocols/pi30m044.py
+index 67f5e87..920bf00 100644
+--- a/mppsolar/protocols/pi30m044.py
++++ b/mppsolar/protocols/pi30m044.py
+@@ -13,30 +13,30 @@ QUERY_COMMANDS = {
+         "response": [
+             [
+                 1,
+-                "Grid Rating Voltage",
++                "AC Input Voltage Rating",
+                 "float",
+                 "V",
+                 {"icon": "mdi:transmission-tower-import", "device-class": "voltage"},
+             ],
+-            [2, "Grid Rating Current", "float", "A", {"icon": "mdi:current-ac", "device-class": "current"}],
++            [2, "AC Input Current Rating", "float", "A", {"icon": "mdi:current-ac", "device-class": "current"}],
+             [
+                 3,
+-                "AC Output Rating Voltage",
++                "AC Output Voltage Rating",
+                 "float",
+                 "V",
+                 {"icon": "mdi:transmission-tower-export", "device-class": "voltage"},
+             ],
+-            [4, "AC Output Rating Frequency", "float", "Hz", {"icon": "mdi:current-ac", "device-class": "frequency"}],
+-            [5, "AC Output Rating Current", "float", "A", {"icon": "mdi:current-ac", "device-class": "current"}],
+-            [6, "AC Output Rating Apparent Power", "int", "VA", {"icon": "mdi:power-plug", "device-class": "apparent_power"}],
++            [4, "AC Output Frequency Rating", "float", "Hz", {"icon": "mdi:current-ac", "device-class": "frequency"}],
++            [5, "AC Output Current Rating", "float", "A", {"icon": "mdi:current-ac", "device-class": "current"}],
++            [6, "AC Output Apparent Power Rating", "int", "VA", {"icon": "mdi:power-plug", "device-class": "apparent_power"}],
+             [
+                 7,
+-                "AC Output Rating Active Power",
++                "AC Output Active Power Rating",
+                 "int",
+                 "W",
+                 {"icon": "mdi:power-plug", "device-class": "power", "state_class": "measurement"},
+             ],
+-            [8, "Battery Rating Voltage", "float", "V", {"icon": "mdi:battery-outline", "device-class": "voltage"}],
++            [8, "Battery Voltage Rating", "float", "V", {"icon": "mdi:battery-outline", "device-class": "voltage"}],
+             [9, "Battery Recharge Voltage", "float", "V", {"icon": "mdi:battery-outline", "device-class": "voltage"}],
+             [10, "Battery Under Voltage", "float", "V", {"icon": "mdi:battery-outline", "device-class": "voltage"}],
+             [
+diff --git a/mppsolar/protocols/pi30m045.py b/mppsolar/protocols/pi30m045.py
+index 123fbe0..96fb10e 100644
+--- a/mppsolar/protocols/pi30m045.py
++++ b/mppsolar/protocols/pi30m045.py
+@@ -158,8 +158,8 @@ QUERY_COMMANDS = {
+                     "86": "AC output mode setting different",
+                 },
+             ],
+-            [5, "Grid Voltage", "float", "V", {"icon": "mdi:power-plug", "device-class": "voltage"}],
+-            [6, "Grid Frequency", "float", "Hz", {"icon": "mdi:current-ac", "device-class": "frequency"}],
++            [5, "AC Input Voltage", "float", "V", {"icon": "mdi:power-plug", "device-class": "voltage"}],
++            [6, "AC Input Frequency", "float", "Hz", {"icon": "mdi:current-ac", "device-class": "frequency"}],
+             [7, "AC Output Voltage", "float", "V", {"icon": "mdi:power-plug", "device-class": "voltage"}],
+             [8, "AC Output Frequency", "float", "Hz", {"icon": "mdi:current-ac", "device-class": "frequency"}],
+             [9, "AC Output Apparent Power", "int", "VA", {"icon": "mdi:power-plug", "device-class": "apparent_power"}],
+diff --git a/mppsolar/protocols/pi30max.py b/mppsolar/protocols/pi30max.py
+index 1dad8e9..459b1b4 100644
+--- a/mppsolar/protocols/pi30max.py
++++ b/mppsolar/protocols/pi30max.py
+@@ -40,30 +40,30 @@ QUERY_COMMANDS = {
+         "response": [
+             [
+                 1,
+-                "AC Input Voltage",
++                "AC Input Voltage Rating",
+                 "float",
+                 "V",
+                 {"icon": "mdi:transmission-tower-import", "device-class": "voltage"},
+             ],
+-            [2, "AC Input Current", "float", "A", {"icon": "mdi:current-ac", "device-class": "current"}],
++            [2, "AC Input Current Rating", "float", "A", {"icon": "mdi:current-ac", "device-class": "current"}],
+             [
+                 3,
+-                "AC Output Voltage",
++                "AC Output Voltage Rating",
+                 "float",
+                 "V",
+                 {"icon": "mdi:transmission-tower-export", "device-class": "voltage"},
+             ],
+-            [4, "AC Output Frequency", "float", "Hz", {"icon": "mdi:current-ac", "device-class": "frequency"}],
+-            [5, "AC Output Current", "float", "A", {"icon": "mdi:current-ac", "device-class": "current"}],
+-            [6, "AC Output Apparent Power", "int", "VA", {"icon": "mdi:power-plug", "device-class": "apparent_power"}],
++            [4, "AC Output Frequency Rating", "float", "Hz", {"icon": "mdi:current-ac", "device-class": "frequency"}],
++            [5, "AC Output Current Rating", "float", "A", {"icon": "mdi:current-ac", "device-class": "current"}],
++            [6, "AC Output Apparent Power Rating", "int", "VA", {"icon": "mdi:power-plug", "device-class": "apparent_power"}],
+             [
+                 7,
+-                "AC Output Active Power",
++                "AC Output Active Power Rating",
+                 "int",
+                 "W",
+                 {"icon": "mdi:power-plug", "device-class": "power", "state_class": "measurement"},
+             ],
+-            [8, "Battery Voltage", "float", "V", {"icon": "mdi:battery-outline", "device-class": "voltage"}],
++            [8, "Battery Voltage Rating", "float", "V", {"icon": "mdi:battery-outline", "device-class": "voltage"}],
+             [9, "Battery Recharge Voltage", "float", "V", {"icon": "mdi:battery-outline", "device-class": "voltage"}],
+             [10, "Battery Under Voltage", "float", "V", {"icon": "mdi:battery-outline", "device-class": "voltage"}],
+             [
+@@ -391,8 +391,8 @@ QUERY_COMMANDS = {
+                     "86": "AC output mode setting different",
+                 },
+             ],
+-            [5, "Grid Voltage", "float", "V", {"icon": "mdi:power-plug", "device-class": "voltage"}],
+-            [6, "Grid Frequency", "float", "Hz", {"icon": "mdi:current-ac", "device-class": "frequency"}],
++            [5, "AC Input Voltage", "float", "V", {"icon": "mdi:power-plug", "device-class": "voltage"}],
++            [6, "AC Input Frequency", "float", "Hz", {"icon": "mdi:current-ac", "device-class": "frequency"}],
+             [7, "AC Output Voltage", "float", "V", {"icon": "mdi:power-plug", "device-class": "voltage"}],
+             [8, "AC Output Frequency", "float", "Hz", {"icon": "mdi:current-ac", "device-class": "frequency"}],
+             [9, "AC Output Apparent Power", "int", "VA", {"icon": "mdi:power-plug", "device-class": "apparent_power"}],
+diff --git a/mppsolar/protocols/pi30revo.py b/mppsolar/protocols/pi30revo.py
+index 2a8ac1a..ab1fb92 100644
+--- a/mppsolar/protocols/pi30revo.py
++++ b/mppsolar/protocols/pi30revo.py
+@@ -122,7 +122,7 @@ COMMANDS = {
+             ["float", "PV Input Current", "A"],
+             ["int", "PV Power", "W"],
+             ["int", "Daily PV Power Generated", "WH"],
+-            ["int", "Total PV Power Generated", "kWH"],
++            ["int", "Total PV Energy Generated", "kWH"],
+             [
+                 "keyed",
+                 "Device Mode",
+@@ -235,7 +235,7 @@ COMMANDS = {
+         "type": "QUERY",
+         "crctype": "crc",
+         "response": [
+-            ["float", "AC Input Voltage", "V"],
++            ["float", "AC Input Voltage Total", "V"],
+             ["float", "AC Input Frequency", "Hz"],
+             ["float", "AC Output Voltage", "V"],
+             ["float", "AC Output Frequency", "Hz"],
+@@ -247,8 +247,8 @@ COMMANDS = {
+             ["int", "Battery Charging Current", "A"],
+             ["int", "Battery Capacity", "%"],
+             ["int", "Inverter Heat Sink Temperature", "°C"],
+-            ["float", "PV Power", "W"],
+-            ["float", "PV Input Voltage", "V"],
++            ["float", "PV1 Power", "W"],
++            ["float", "PV1 Input Voltage", "V"],
+             ["float", "Battery Voltage from SCC", "V"],
+             ["int", "Daily Power Generated", "WH"],
+             [
+@@ -285,14 +285,14 @@ COMMANDS = {
+         "type": "QUERY",
+         "crctype": "crc",
+         "response": [
+-            ["float", "AC Input Voltage", "V"],
+-            ["float", "AC Input Current", "A"],
+-            ["float", "AC Output Voltage", "V"],
+-            ["float", "AC Output Frequency", "Hz"],
+-            ["float", "AC Output Current", "A"],
+-            ["int", "AC Output Apparent Power", "VA"],
+-            ["int", "AC Output Active Power", "W"],
+-            ["float", "Battery Voltage", "V"],
++            ["float", "AC Input Voltage Rating", "V"],
++            ["float", "AC Input Current Rating", "A"],
++            ["float", "AC Output Voltage Rating", "V"],
++            ["float", "AC Output Frequency Rating", "Hz"],
++            ["float", "AC Output Current Rating", "A"],
++            ["int", "AC Output Apparent Power Rating", "VA"],
++            ["int", "AC Output Active Power Rating", "W"],
++            ["float", "Battery Voltage Rating", "V"],
+             ["float", "Battery Recharge Voltage", "V"],
+             ["float", "Battery Under Voltage", "V"],
+             ["float", "Battery Bulk Charge Voltage", "V"],
+diff --git a/mppsolar/protocols/pi41.py b/mppsolar/protocols/pi41.py
+index 186cc29..437e02c 100644
+--- a/mppsolar/protocols/pi41.py
++++ b/mppsolar/protocols/pi41.py
+@@ -61,16 +61,16 @@ NEW_COMMANDS = {
+                     "86": "Parallel output setting different",
+                 },
+             ],
+-            ["float", "L2 AC input voltage", "V"],
+-            ["float", "L2 AC input frequency", "Hz"],
+-            ["float", "L2 AC output voltage", "V"],
+-            ["float", "L2 AC output frequency", "Hz"],
+-            ["int", "L2 AC output apparent power", "VA"],
+-            ["int", "L2 AC output active power", "W"],
+-            ["int", "L2 Load percentage", "%"],
+-            ["float", "L2 Battery voltage", "V"],
+-            ["int", "L2 Battery charging current", "A"],
+-            ["int", "L2 Battery capacity", "%"],
++            ["float", "L2 AC Input Voltage", "V"],
++            ["float", "L2 AC Input Frequency", "Hz"],
++            ["float", "L2 AC Output Voltage", "V"],
++            ["float", "L2 AC Output Frequency", "Hz"],
++            ["int", "L2 AC Output Apparent Power", "VA"],
++            ["int", "L2 AC Output Active Power", "W"],
++            ["int", "L2 Load Percentage", "%"],
++            ["float", "L2 Battery Voltage", "V"],
++            ["int", "L2 Battery Charging Current", "A"],
++            ["int", "L2 Battery Capacity", "%"],
+             ["float", "PV2 Input Voltage", "V"],
+             ["int", "PV2 charging current", "A"],
+             [
+@@ -148,21 +148,21 @@ NEW_COMMANDS = {
+                     "86": "Parallel output setting different",
+                 },
+             ],
+-            ["float", "L1 AC input voltage", "V"],
+-            ["float", "L1 AC input frequency", "Hz"],
+-            ["float", "L1 AC output voltage", "V"],
+-            ["float", "L1 AC output frequency", "Hz"],
+-            ["int", "L1 AC output apparent power", "VA"],
+-            ["int", "L1 AC output active power", "W"],
+-            ["int", "L1 Load percentage", "%"],
+-            ["float", "Battery voltage", "V"],
+-            ["int", "Battery charging current", "A"],
+-            ["int", "Battery capacity", "%"],
++            ["float", "L1 AC Input Voltage", "V"],
++            ["float", "L1 AC Input Frequency", "Hz"],
++            ["float", "L1 AC Output Voltage", "V"],
++            ["float", "L1 AC Output Frequency", "Hz"],
++            ["int", "L1 AC Output Apparent Power", "VA"],
++            ["int", "L1 AC Output Active Power", "W"],
++            ["int", "L1 Load Percentage", "%"],
++            ["float", "Battery Voltage", "V"],
++            ["int", "Battery Charging Current", "A"],
++            ["int", "Battery Capacity", "%"],
+             ["float", "PV1 Input Voltage", "V"],
+-            ["int", "Total charging current", "A"],
+-            ["int", "Total AC output apparent power", "VA"],
+-            ["int", "Total output active power", "W"],
+-            ["int", "Total AC output percentage", "%"],
++            ["int", "Total Charging Current", "A"],
++            ["int", "Total AC Output Apparent Power", "VA"],
++            ["int", "Total Output Active Power", "W"],
++            ["int", "Total AC Output Percentage", "%"],
+             [
+                 "flags",
+                 "Inverter Status",
+@@ -195,11 +195,11 @@ NEW_COMMANDS = {
+                 "Charger source priority",
+                 ["Utility first", "Solar first", "Solar + Utility", "Solar only"],
+             ],
+-            ["int", "Max charger current", "A"],
+-            ["int", "Max charger range", "A"],
+-            ["int", "Max AC charger current", "A"],
+-            ["int", "PV1 charging current", "A"],
+-            ["int", "Battery discharge current", "A"],
++            ["int", "Max Charger Current", "A"],
++            ["int", "Max Charger Range", "A"],
++            ["int", "Max AC Charger Current", "A"],
++            ["int", "PV1 Input Current", "A"],
++            ["int", "Battery Discharge Current", "A"],
+         ],
+         "test_responses": [
+             b"(1 92911906100045 L 00 122.9 59.98 122.9 59.98 0331 0272 013 56.1 004 100 000.0 004 01577 01400 009 01000010 6 0 060 220 40 00 000\xC7\xC2\r",
+@@ -291,14 +291,14 @@ NEW_COMMANDS = {
+         "help": " -- queries the current settings from the Inverter",
+         "type": "QUERY",
+         "response": [
+-            ["float", "AC Input Voltage", "V"],
+-            ["float", "AC Input Current", "A"],
+-            ["float", "AC Output Voltage", "V"],
+-            ["float", "AC Output Frequency", "Hz"],
+-            ["float", "AC Output Current", "A"],
+-            ["int", "AC Output Apparent Power", "VA"],
+-            ["int", "AC Output Active Power", "W"],
+-            ["float", "Battery Voltage", "V"],
++            ["float", "AC Input Voltage Rating", "V"],
++            ["float", "AC Input Current Rating", "A"],
++            ["float", "AC Output Voltage Rating", "V"],
++            ["float", "AC Output Frequency Rating", "Hz"],
++            ["float", "AC Output Current Rating", "A"],
++            ["int", "AC Output Apparent Power Rating", "VA"],
++            ["int", "AC Output Active Power Rating", "W"],
++            ["float", "Battery Voltage Rating", "V"],
+             ["float", "Battery Recharge Voltage", "V"],
+             ["float", "Battery Under Voltage", "V"],
+             ["float", "Battery Bulk Charge Voltage", "V"],
+diff --git a/mppsolar/version.py b/mppsolar/version.py
+index 64c41ba..81934ba 100644
+--- a/mppsolar/version.py
++++ b/mppsolar/version.py
+@@ -1 +1 @@
+-__version__ = "0.16.55"
++__version__ = "0.16.56-dev"
+diff --git a/pyproject.toml b/pyproject.toml
+index d46ef78..cb3b3a2 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,6 +1,6 @@
+ [tool.poetry]
+ name = "mppsolar"
+-version = "0.16.55"
++version = "0.16.56"
+ description = "Package to communicate with Solar inverters and BMSs"
+ authors = ["John Blance"]
+ readme = "README.md"
+diff --git a/tests/integration/test_outputs.py b/tests/integration/test_outputs.py
+index 7c786b4..e8bbf34 100644
+--- a/tests/integration/test_outputs.py
++++ b/tests/integration/test_outputs.py
+@@ -14,7 +14,7 @@ class testOutputs(unittest.TestCase):
+ 
+     def test_outputs_count(self):
+         # print(len(OUTPUTS))
+-        assert len(OUTPUTS) == 24, len(OUTPUTS)
++        assert len(OUTPUTS) == 25, len(OUTPUTS)
+ 
+     def test_outputs_init(self):
+         for output in OUTPUTS:
