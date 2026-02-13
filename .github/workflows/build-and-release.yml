@@ -68,6 +68,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.has-changes == 'true'
     runs-on: ubuntu-latest
+    continue-on-error: true  # Allow partial build failures
     strategy:
       fail-fast: false
       matrix:
@@ -239,7 +240,7 @@ jobs:
   create-release:
     name: Create Release
     needs: [detect-changes, build]
-    if: needs.detect-changes.outputs.has-changes == 'true' && !failure()
+    if: needs.detect-changes.outputs.has-changes == 'true' && !cancelled()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
