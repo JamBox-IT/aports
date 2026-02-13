@@ -220,7 +220,6 @@ jobs:
 
       - name: Collect built packages
         shell: alpine.sh {0}
-        if: success()
         run: |
           # Copy packages to a location accessible outside chroot
           WORKSPACE="${GITHUB_WORKSPACE:-/home/runner/work/aports/aports}"
@@ -229,7 +228,6 @@ jobs:
           ls -la "$WORKSPACE/packages/${{ matrix.arch }}/" || echo "No packages built"
 
       - name: Upload build artifacts
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: packages-${{ matrix.arch }}
@@ -344,3 +342,5 @@ jobs:
           publish_branch: gh-pages
           keep_files: true
           destination_dir: ${{ steps.alpine-version.outputs.version }}
+          enable_jekyll: false  # Disable Jekyll processing
+          cname: false  # Don't use custom domain
