@@ -82,6 +82,7 @@ jobs:
         with:
           arch: ${{ matrix.arch }}
           branch: latest-stable
+          mirror-url: https://dl-cdn.alpinelinux.org/alpine
           extra-repositories: https://dl-cdn.alpinelinux.org/alpine/latest-stable/community
           packages: alpine-sdk abuild apk-tools jq
 
