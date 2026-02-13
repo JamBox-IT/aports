@@ -172,7 +172,7 @@ jobs:
             echo "Architectures: $arch"
 
             # Check if this package should be built for this architecture
-            if echo "$arch" | grep -qE "(all|${{ matrix.arch }})"; then
+            if echo "$arch" | grep -qE "(all|noarch|${{ matrix.arch }})"; then
               if abuild -r 2>&1; then
                 echo "SUCCESS: Built $pkgname"
               else
