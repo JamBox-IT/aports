@@ -257,16 +257,21 @@ jobs:
           mkdir -p packages
           for arch_dir in all-packages/packages-*/; do
             arch=$(basename "$arch_dir" | sed 's/packages-//')
-            mkdir -p "packages"
-            # Rename packages to include architecture in filename
+            # Create architecture-specific subdirectories
+            mkdir -p "packages/${arch}"
+            # Copy packages to arch subdirectory AND create arch-suffixed files for release
             for pkg in "$arch_dir"*.apk; do
               if [ -f "$pkg" ]; then
                 pkgname=$(basename "$pkg" .apk)
+                # For release attachments (with arch in filename)
                 cp "$pkg" "packages/${pkgname}-${arch}.apk"
+                # For Alpine repo structure (in arch subdirectory)
+                cp "$pkg" "packages/${arch}/"
               fi
             done
           done
           ls -la packages/
+          ls -la packages/*/
 
       - name: Generate SBOM
         run: |
@@ -301,37 +306,45 @@ jobs:
 
       - name: Create Alpine repository structure
         run: |
+          # Determine Alpine version from branch
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          [ "$BRANCH" = "main" ] && BRANCH="edge"
+          echo "Building repository for Alpine version: $BRANCH"
+
+          # Create repository directory structure: edge/JamBox/ or v3.19/JamBox/
+          mkdir -p "${BRANCH}/JamBox"
+
           # Use Alpine container to create APKINDEX (apk-tools not in Ubuntu repos)
-          docker run --rm -v "$PWD:/work" -w /work alpine:latest sh -c '
+          docker run --rm \
+            -v "$PWD/packages:/packages:ro" \
+            -v "$PWD/${BRANCH}:/output" \
+            -w /output \
+            alpine:latest sh -c '
             apk add --no-cache abuild
-
-            # Use branch name directly (main->edge, v3.19->v3.19)
-            BRANCH="${GITHUB_REF#refs/heads/}"
-            [ "$BRANCH" = "main" ] && BRANCH="edge"
-
-            echo "Building for Alpine version: $BRANCH"
-
-            # Create repository directory structure: edge/JamBox/ or v3.19/JamBox/
-            mkdir -p ${BRANCH}/JamBox
 
             # Organize packages by architecture with APKINDEX
             for arch in x86_64 aarch64 armv7 armhf; do
-              if [ -d "packages/${arch}" ] && ls packages/${arch}/*.apk 2>/dev/null; then
+              if [ -d "/packages/${arch}" ] && ls /packages/${arch}/*.apk 2>/dev/null | head -1 >/dev/null; then
                 echo "Processing packages for ${arch}..."
-                mkdir -p ${BRANCH}/JamBox/${arch}
-                cp packages/${arch}/*.apk ${BRANCH}/JamBox/${arch}/
+                mkdir -p JamBox/${arch}
+                cp /packages/${arch}/*.apk JamBox/${arch}/
 
                 # Create APKINDEX
-                cd ${BRANCH}/JamBox/${arch}
+                cd JamBox/${arch}
                 apk index -o APKINDEX.tar.gz *.apk
-                cd /work
+                echo "Created APKINDEX for ${arch} with $(ls -1 *.apk | wc -l) packages"
+                cd /output
               else
                 echo "No packages found for ${arch}"
               fi
             done
 
-            ls -laR ${BRANCH}/
+            echo "Repository structure:"
+            find JamBox -type f -name "*.apk" -o -name "APKINDEX.tar.gz"
           '
+
+          echo "Final repository structure for ${BRANCH}:"
+          ls -la "${BRANCH}/JamBox/"*/
 
       - name: Determine Alpine version for publishing
         id: alpine-version
