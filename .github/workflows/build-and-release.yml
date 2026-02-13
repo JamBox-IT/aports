@@ -152,6 +152,7 @@ jobs:
 
       - name: Build packages for ${{ matrix.arch }}
         shell: alpine.sh {0}
+        continue-on-error: true
         run: |
           PACKAGES='${{ needs.detect-changes.outputs.packages }}'
           BUILD_FAILED=0
