@@ -199,6 +199,9 @@ jobs:
         run: |
           PACKAGES='${{ needs.detect-changes.outputs.packages }}'
           BUILD_FAILED=0
+          FAILED_PACKAGES=""
+          SUCCESSFUL_PACKAGES=""
+          SKIPPED_PACKAGES=""
 
           # Find the actual repository path
           REPO_PATH="${GITHUB_WORKSPACE:-/home/runner/work/aports/aports}"
@@ -237,20 +240,50 @@ jobs:
             # Check if this package should be built for this architecture
             if echo "$arch" | grep -qE "(all|noarch|${{ matrix.arch }})"; then
               if abuild -r 2>&1; then
-                echo "SUCCESS: Built $pkgname"
+                echo "✅ SUCCESS: Built $pkgname"
+                SUCCESSFUL_PACKAGES="$SUCCESSFUL_PACKAGES $pkgname"
               else
-                echo "FAILED: Could not build $pkgname"
+                echo "❌ FAILED: Could not build $pkgname"
                 BUILD_FAILED=1
+                FAILED_PACKAGES="$FAILED_PACKAGES $pkgname"
               fi
             else
-              echo "SKIP: Package not configured for ${{ matrix.arch }}"
+              echo "⏭️  SKIP: $pkgname not configured for ${{ matrix.arch }} (supports: $arch)"
+              SKIPPED_PACKAGES="$SKIPPED_PACKAGES $pkgname"
             fi
 
             cd "$REPO_PATH" || exit 1
           done
 
+          # Generate build summary
+          echo ""
+          echo "========================================="
+          echo "Build Summary for ${{ matrix.arch }}"
+          echo "========================================="
+          if [ -n "$SUCCESSFUL_PACKAGES" ]; then
+            echo "✅ Successful: $SUCCESSFUL_PACKAGES"
+          fi
+          if [ -n "$FAILED_PACKAGES" ]; then
+            echo "❌ Failed: $FAILED_PACKAGES"
+          fi
+          if [ -n "$SKIPPED_PACKAGES" ]; then
+            echo "⏭️  Skipped (arch not supported): $SKIPPED_PACKAGES"
+          fi
+          echo "========================================="
+
+          # Save build status to file for later steps
+          mkdir -p "$WORKSPACE/build-status"
+          cat > "$WORKSPACE/build-status/${{ matrix.arch }}.txt" << EOF
+          ARCH=${{ matrix.arch }}
+          ALPINE_VERSION=${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}
+          SUCCESSFUL=$SUCCESSFUL_PACKAGES
+          FAILED=$FAILED_PACKAGES
+          SKIPPED=$SKIPPED_PACKAGES
+          EOF
+
           if [ $BUILD_FAILED -ne 0 ]; then
-            echo "WARNING: Build failed for one or more packages, but continuing to publish successful builds"
+            echo "::warning::Build failed for: $FAILED_PACKAGES"
+            exit 1
           fi
 
       - name: Sign packages
@@ -278,6 +311,71 @@ jobs:
           name: packages-${{ matrix.arch }}
           path: packages/${{ matrix.arch }}/
           retention-days: 30
+
+      - name: Upload build status
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-status-${{ matrix.arch }}
+          path: build-status/
+          retention-days: 7
+
+  build-summary:
+    name: Build Summary Report
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build status
+        uses: actions/download-artifact@v4
+        with:
+          pattern: build-status-*
+          path: build-status
+
+      - name: Generate summary report
+        run: |
+          echo "# Build Summary for Alpine ${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Branch: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          TOTAL_SUCCESS=0
+          TOTAL_FAILED=0
+
+          for status_dir in build-status/build-status-*/; do
+            if [ ! -d "$status_dir" ]; then
+              continue
+            fi
+
+            for status_file in "$status_dir"*.txt; do
+              if [ ! -f "$status_file" ]; then
+                continue
+              fi
+
+              . "$status_file"
+
+              echo "## Architecture: $ARCH" >> $GITHUB_STEP_SUMMARY
+
+              if [ -n "$SUCCESSFUL" ]; then
+                echo "✅ **Successful:**$SUCCESSFUL" >> $GITHUB_STEP_SUMMARY
+                TOTAL_SUCCESS=$((TOTAL_SUCCESS + $(echo $SUCCESSFUL | wc -w)))
+              fi
+
+              if [ -n "$FAILED" ]; then
+                echo "❌ **Failed:**$FAILED" >> $GITHUB_STEP_SUMMARY
+                TOTAL_FAILED=$((TOTAL_FAILED + $(echo $FAILED | wc -w)))
+              fi
+
+              if [ -n "$SKIPPED" ]; then
+                echo "⏭️  **Skipped (not for this arch):**$SKIPPED" >> $GITHUB_STEP_SUMMARY
+              fi
+
+              echo "" >> $GITHUB_STEP_SUMMARY
+            done
+          done
+
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "**Total:** $TOTAL_SUCCESS succeeded, $TOTAL_FAILED failed" >> $GITHUB_STEP_SUMMARY
 
   create-release:
     name: Create GitHub Releases
