@@ -38,6 +38,19 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
+      - name: Setup signing keys
+        run: |
+          mkdir -p ~/.abuild
+
+          # Install RSA public key for package verification
+          echo "${{ secrets.RSA_PUBLIC_KEY }}" > ~/.abuild/jambox.rsa.pub
+          chmod 644 ~/.abuild/jambox.rsa.pub
+
+          # Also place in a location accessible to Docker
+          mkdir -p .abuild-keys
+          echo "${{ secrets.RSA_PUBLIC_KEY }}" > .abuild-keys/jambox.rsa.pub
+          chmod 644 .abuild-keys/jambox.rsa.pub
+
       - name: Download build artifacts (if called from build workflow)
         continue-on-error: true
         uses: actions/download-artifact@v4

@@ -18,15 +18,21 @@ runs:
 
         docker run --rm \
           -v "${{ github.workspace }}/${ALPINE_VER}:/repo" \
+          -v "${{ github.workspace }}/.abuild-keys:/keys:ro" \
           -w /repo \
           alpine:latest sh -c '
             apk add --no-cache abuild
+
+            # Install JamBox public key for signature verification
+            mkdir -p /etc/apk/keys
+            cp /keys/jambox.rsa.pub /etc/apk/keys/
 
             for arch in x86_64 aarch64 armv7 armhf; do
               if [ -d "JamBox/${arch}" ] && ls JamBox/${arch}/*.apk >/dev/null 2>&1; then
                 cd "JamBox/${arch}"
                 PKG_COUNT=$(ls -1 *.apk | wc -l)
                 echo "Generating APKINDEX for ${arch} (${PKG_COUNT} packages)..."
+                # Now apk index can verify signatures with the public key
                 apk index -o APKINDEX.tar.gz *.apk
                 echo "  ✓ APKINDEX created for ${arch}"
                 cd /repo
