@@ -60,7 +60,8 @@ jobs:
                 continue
               fi
 
-              release_tag="${pkgname}-${pkgver}-r${pkgrel}"
+              # Append Alpine version to tag to avoid conflicts between branches
+              release_tag="${pkgname}-${pkgver}-r${pkgrel}_alpine${{ inputs.alpine-version }}"
 
               # Skip if we already created this release
               if [ -n "${CREATED_RELEASES[$release_tag]}" ]; then
@@ -89,7 +90,7 @@ jobs:
             cat > "${release_dir}/RELEASE.md" << EOF
           # ${release_tag}
 
-          Alpine Linux package release for ${release_tag}.
+          Alpine Linux package built for Alpine ${{ inputs.alpine-version }}.
 
           ## Architectures
 
