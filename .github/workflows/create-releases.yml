@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   create-release:
-    name: Create GitHub Release
+    name: Create Per-Package Releases
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,54 +25,108 @@ jobs:
         with:
           path: all-packages
 
-      - name: Organize packages by architecture
+      - name: Create per-package releases
         run: |
-          mkdir -p packages
+          # Track created releases to avoid duplicates
+          declare -A CREATED_RELEASES
+
           for arch_dir in all-packages/packages-*/; do
             arch=$(basename "$arch_dir" | sed 's/packages-//')
-            # Create architecture-specific subdirectories
-            mkdir -p "packages/${arch}"
-            # Copy packages to arch subdirectory AND create arch-suffixed files for release
+
             for pkg in "$arch_dir"*.apk; do
-              if [ -f "$pkg" ]; then
-                pkgname=$(basename "$pkg" .apk)
-                # For release attachments (with arch in filename)
-                cp "$pkg" "packages/${pkgname}-${arch}.apk"
-                # For Alpine repo structure (in arch subdirectory)
-                cp "$pkg" "packages/${arch}/"
+              if [ ! -f "$pkg" ]; then
+                continue
               fi
+
+              # Extract package name and version
+              # Format: pkgname-pkgver-rN-arch.apk
+              basename=$(basename "$pkg" .apk)
+
+              # Remove arch suffix
+              without_arch="${basename%-${arch}}"
+
+              # Extract pkgname-pkgver-rN
+              # This regex handles package names with hyphens
+              if [[ "$without_arch" =~ ^(.+)-([0-9]+\.[0-9]+\.[0-9]+.*)-r([0-9]+)$ ]]; then
+                pkgname="${BASH_REMATCH[1]}"
+                pkgver="${BASH_REMATCH[2]}"
+                pkgrel="${BASH_REMATCH[3]}"
+              elif [[ "$without_arch" =~ ^(.+)-([0-9]+\.[0-9]+.*)-r([0-9]+)$ ]]; then
+                pkgname="${BASH_REMATCH[1]}"
+                pkgver="${BASH_REMATCH[2]}"
+                pkgrel="${BASH_REMATCH[3]}"
+              else
+                echo "⚠️  Could not parse version from: $basename"
+                continue
+              fi
+
+              release_tag="${pkgname}-${pkgver}-r${pkgrel}"
+
+              # Skip if we already created this release
+              if [ -n "${CREATED_RELEASES[$release_tag]}" ]; then
+                echo "  Adding $basename to existing release $release_tag"
+                mkdir -p "releases/${release_tag}"
+                cp "$pkg" "releases/${release_tag}/"
+                continue
+              fi
+
+              echo "📦 Creating release for: $release_tag"
+              mkdir -p "releases/${release_tag}"
+              cp "$pkg" "releases/${release_tag}/"
+              CREATED_RELEASES[$release_tag]=1
             done
           done
-          ls -la packages/
-          ls -la packages/*/
 
-      - name: Generate SBOM
-        run: |
-          cat > PACKAGES.txt << EOF
-          # JamBox Alpine Linux Packages
-          # Built: $(date)
-          # Commit: ${{ github.sha }}
+          # Create releases for each unique package version
+          for release_dir in releases/*/; do
+            if [ ! -d "$release_dir" ]; then
+              continue
+            fi
+
+            release_tag=$(basename "$release_dir")
+
+            # Generate release notes
+            cat > "${release_dir}/RELEASE.md" << EOF
+          # ${release_tag}
+
+          Alpine Linux package release for ${release_tag}.
+
+          ## Architectures
 
           EOF
 
-          echo "## Packages" >> PACKAGES.txt
-          ls -1 packages/*.apk 2>/dev/null | xargs -I {} basename {} >> PACKAGES.txt || true
+            # List all architectures in this release
+            for apk in "${release_dir}"*.apk; do
+              if [ -f "$apk" ]; then
+                echo "- $(basename "$apk")" >> "${release_dir}/RELEASE.md"
+              fi
+            done
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: packages/*.apk
-          body_path: PACKAGES.txt
-          draft: false
-          prerelease: false
-          tag_name: v${{ github.run_number }}
-          name: Release ${{ github.run_number }}
+            cat >> "${release_dir}/RELEASE.md" << EOF
+
+          ## Installation
+
+          \`\`\`bash
+          # Download for your architecture
+          wget https://github.com/${{ github.repository }}/releases/download/${release_tag}/<package-file>.apk
+
+          # Install
+          apk add --allow-untrusted <package-file>.apk
+          \`\`\`
+
+          Or use the JamBox repository:
+          \`\`\`bash
+          apk add ${release_tag%-r*}@jambox
+          \`\`\`
+          EOF
+
+            # Create the GitHub release
+            echo "Creating GitHub release: $release_tag"
+            gh release create "$release_tag" \
+              "${release_dir}"*.apk \
+              --title "$release_tag" \
+              --notes-file "${release_dir}/RELEASE.md" \
+              --repo "${{ github.repository }}" || echo "⚠️  Release $release_tag may already exist"
+          done
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload packages as artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: final-release-packages
-          path: packages/
-          retention-days: 90
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
