@@ -2,10 +2,8 @@ maintainer="Corey DeLasaux <cordelster@gmail.com>"
 pkgname=kanidm
 pkgver=1.8.6
 pkgrel=1
-pkgdesc="A simple, secure and fast identity management platform"
-url="https://kanidm.com/"
-# only x86_64_v2 and aarch64 are supported
-# riscv64: too slow to build
+pkgdesc="A identity management server, acting as an authority on account information"
+url="https://kanidm.github.io"
 arch="all !x86 !armhf !armv7 !riscv64"
 license="MPL-2.0"
 depends="
@@ -78,6 +76,7 @@ build() {
 }
 
 check() {
+	export RUSTFLAGS="$RUSTFLAGS -C link-args=-Wl,-z,stack-size=2097152"
 	KANIDM_BUILD_PROFILE="$_profile" \
 	cargo test $_cargoopts -- --test-threads=1
 }
@@ -112,7 +111,7 @@ clients() {
 }
 
 server() {
-	pkgdesc="Kanidm server for idendity management, supports RADIUS, ssh key management"
+	pkgdesc="Kanidm server for idendity management, OAuth2 / OpenID Connect, Webauthn (level 3), ssh key management"
 	depends=""
 
 	install -Dm755 "$builddir"/target/release/kanidmd -t "$subpkgdir"/usr/bin/
@@ -140,7 +139,7 @@ unixd_clients() {
 }
 
 ldap_sync() {
-	pkgdesc="Kanidm LDAP sync tool for migrating from LDAP directories"
+	pkgdesc="Kanidm LDAP sync tool for migrating/sync from LDAP directories"
 	depends="$pkgname-clients"
 
 	install -Dm755 "$builddir"/target/release/kanidm-ldap-sync -t "$subpkgdir"/usr/bin/

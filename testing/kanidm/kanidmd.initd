@@ -7,6 +7,8 @@ command_user="kanidmd:kanidmd"
 command_background=true
 pidfile="/run/$RC_SVCNAME.pid"
 
+extra_started_commands="reload"
+
 depend() {
 	need net
 	after firewall
@@ -22,4 +24,10 @@ start_pre() {
 		eerror "	kanidmd cert-generate -c /etc/kanidm/server.toml"
 		return 1
 	fi
+}
+
+reload() {
+    ebegin "Reloading ${RC_SVCNAME} configuration"
+    start-stop-daemon --signal HUP --pidfile "${pidfile}"
+    eend $?
 }
