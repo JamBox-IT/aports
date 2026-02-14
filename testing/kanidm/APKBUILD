@@ -1,11 +1,9 @@
 maintainer="Corey DeLasaux <cordelster@gmail.com>"
 pkgname=kanidm
 pkgver=1.8.6
-pkgrel=1
-pkgdesc="A simple, secure and fast identity management platform"
-url="https://kanidm.com/"
-# only x86_64_v2 and aarch64 are supported
-# riscv64: too slow to build
+pkgrel=2
+pkgdesc="A identity management server, acting as an authority on account information"
+url="https://kanidm.github.io"
 arch="all !x86 !armhf !armv7 !riscv64"
 license="MPL-2.0"
 depends="
@@ -35,6 +33,7 @@ install="
 subpackages="
 	$pkgname-bash-completion
 	$pkgname-clients
+	$pkgname-ipa-sync:ipa_sync
 	$pkgname-ldap-sync:ldap_sync
 	$pkgname-openrc
 	$pkgname-radiusd:radiusd
@@ -78,6 +77,7 @@ build() {
 }
 
 check() {
+	export RUSTFLAGS="$RUSTFLAGS -C link-args=-Wl,-z,stack-size=2097152"
 	KANIDM_BUILD_PROFILE="$_profile" \
 	cargo test $_cargoopts -- --test-threads=1
 }
@@ -112,11 +112,10 @@ clients() {
 }
 
 server() {
-	pkgdesc="Kanidm server for idendity management, supports RADIUS, ssh key management"
+	pkgdesc="Kanidm server for idendity management, OAuth2 / OpenID Connect, Webauthn (level 3), ssh key management"
 	depends=""
 
 	install -Dm755 "$builddir"/target/release/kanidmd -t "$subpkgdir"/usr/bin/
-	install -Dm755 "$builddir"/target/release/kanidm-ipa-sync -t "$subpkgdir"/usr/bin/
 	install -Dm644 "$builddir"/examples/server.toml -t "$subpkgdir"/etc/kanidm/
 
 	install -dv "$subpkgdir"/usr/share/kanidm/ui/hpkg
@@ -140,10 +139,17 @@ unixd_clients() {
 }
 
 ldap_sync() {
-	pkgdesc="Kanidm LDAP sync tool for migrating from LDAP directories"
+	pkgdesc="Kanidm LDAP sync tool for migrating/sync from LDAP directories"
 	depends="$pkgname-clients"
 
 	install -Dm755 "$builddir"/target/release/kanidm-ldap-sync -t "$subpkgdir"/usr/bin/
+}
+
+ipa_sync() {
+	pkgdesc="Kanidm IPA sync tool for migrating/sync from FreeIPA directories"
+	depends="$pkgname-clients"
+
+	install -Dm755 "$builddir"/target/release/kanidm-ipa-sync -t "$subpkgdir"/usr/bin/
 }
 
 radiusd() {
@@ -172,7 +178,7 @@ sha512sums="
 3a6a45c78327e4684f753965a64ab4b7fc24a1e8f3db7aeb9c5e57316c437bc939689698603d4332410881580210cdade59fe3225cc8f080bcf6409895dc264f  kanidm-1.8.6.tar.gz
 db7a5663f84798b1b6dfacb2396f26cd24d45cf84a43c723f436f0af12146d6ae1675c90b628836d4dbb22d4361c8700a6b824886ce283768a5f29440ecdd4c5  initgroups-hooks.patch
 6dac7645e160c1e93ea6be69fd43e77887341058db1149ef19f8687d104b6a71759c01a4d0d7b2257294a5d0494bfa8c497e45faaa06fb567fb9259de5c91a36  release_alpine.toml
-9d5902b736513db0574014a606c01eeb6a3ba6e37f1eff007c3522e75e56b6783fd89591073dc296adcd5f558df4fb1f8437d290552614b20d8bb9745c08410d  kanidmd.initd
+79f95a4f8ddd8bbfdeaf9480e032d186896e47d8c4b39b4ab5c005dab37c12e4ea1628eaa5055d36e3210ad9c1c949e1124f410d66098497ae2a2657482af120  kanidmd.initd
 c9b2b200363034cfc930279be15d60b1cfcf68f4e9d9e491e1adf093b4ea0ad503644994569a6ca4b418cb50bf08239991665a8a52d7587af525db2041699467  kanidm-unixd.initd
 08ab2aa7c1e8b14740172df89f3d265e1a7a06da083f65e8a296f7ac4cfdce7629b624d294a9de9bf4abf42769ca88efd10cb0edbbeb2320971b92d1bee393c0  kanidm-unixd-tasks.initd
 6dec53d50389a7138163eeecef4dbcfe3a3cc474d33e66fcda65272b361219ffa43a59a042d5d59743e3a0b2df00ebcb273418920ebdc0354f52b22a9850bf5f  use-var-lib-kanidm.patch
