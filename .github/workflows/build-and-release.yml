@@ -341,7 +341,7 @@ jobs:
 
   publish-repository:
     name: Publish to Alpine Repository
-    needs: [detect-changes, create-release]
+    needs: [detect-changes, build]
     if: needs.detect-changes.outputs.has-changes == 'true' && !cancelled()
     uses: ./.github/workflows/publish-repository.yml
     permissions:
