@@ -43,25 +43,43 @@ jobs:
           mkdir -p ~/.abuild
           mkdir -p .abuild-keys
 
-          # Install RSA public key with fingerprint-based filename
-          # Use printf to avoid shell interpretation and preserve exact formatting
-          printf '%s\n' "${{ secrets.RSA_PUBLIC_KEY }}" > .abuild-keys/jambox-65ea124a.rsa.pub
+          # Install private key for APKINDEX signing
+          echo "${{ secrets.RSA_PRIVATE_KEY }}" > .abuild-keys/jambox-65ea124a.rsa
+          chmod 600 .abuild-keys/jambox-65ea124a.rsa
+
+          # Install public key for package verification
+          echo "${{ secrets.RSA_PUBLIC_KEY }}" > .abuild-keys/jambox-65ea124a.rsa.pub
           chmod 644 .abuild-keys/jambox-65ea124a.rsa.pub
 
-          # Debug: Check key format
-          echo "Key file details:"
-          echo "  Size: $(wc -c < .abuild-keys/jambox-65ea124a.rsa.pub) bytes"
-          echo "  Lines: $(wc -l < .abuild-keys/jambox-65ea124a.rsa.pub)"
-          echo "  First line: $(head -1 .abuild-keys/jambox-65ea124a.rsa.pub)"
-          echo "  Last line: $(tail -1 .abuild-keys/jambox-65ea124a.rsa.pub)"
-
-          # Verify the key file exists and is readable
-          if [ ! -f .abuild-keys/jambox-65ea124a.rsa.pub ]; then
-            echo "ERROR: Public key not found in .abuild-keys/"
+          # Validate keys using openssl (without exposing secrets)
+          echo "Validating private key..."
+          if openssl rsa -in .abuild-keys/jambox-65ea124a.rsa -check -noout 2>&1; then
+            echo "  ✓ Private key is valid"
+            openssl rsa -in .abuild-keys/jambox-65ea124a.rsa -text -noout 2>&1 | grep "Private-Key:"
+          else
+            echo "  ✗ Private key is INVALID or malformed"
             exit 1
           fi
 
-          echo "✓ Public key staged for Docker container"
+          echo "Validating public key..."
+          if openssl rsa -pubin -in .abuild-keys/jambox-65ea124a.rsa.pub -text -noout 2>&1 | grep "Public-Key:"; then
+            echo "  ✓ Public key is valid"
+          else
+            echo "  ✗ Public key is INVALID or malformed"
+            exit 1
+          fi
+
+          echo "Verifying key pair match..."
+          PRIV_MOD=$(openssl rsa -in .abuild-keys/jambox-65ea124a.rsa -modulus -noout 2>/dev/null | md5sum)
+          PUB_MOD=$(openssl rsa -pubin -in .abuild-keys/jambox-65ea124a.rsa.pub -modulus -noout 2>/dev/null | md5sum)
+          if [ "$PRIV_MOD" = "$PUB_MOD" ]; then
+            echo "  ✓ Private and public keys are a matching pair"
+          else
+            echo "  ✗ Private and public keys DO NOT MATCH"
+            exit 1
+          fi
+
+          echo "✓ All signing keys validated and staged"
 
       - name: Download build artifacts (if called from build workflow)
         continue-on-error: true
