@@ -115,11 +115,11 @@ jobs:
           # Configure /etc/apk/repositories
           cat > /etc/apk/repositories << EOF
           # Alpine main repository
-          https://dl-cdn.alpinelinux.org/alpine/latest-stable/main
+          https://dl-cdn.alpinelinux.org/alpine/${ALPINE_VERSION}/main
           # Alpine community repository
-          https://dl-cdn.alpinelinux.org/alpine/latest-stable/community
-          # Alpine testing repository (for extra dependencies)
-          https://dl-cdn.alpinelinux.org/alpine/edge/testing
+          https://dl-cdn.alpinelinux.org/alpine/${ALPINE_VERSION}/community
+          # Alpine testing repository (commented out - doesn't hold previous builds)
+          # https://dl-cdn.alpinelinux.org/alpine/edge/testing
           # JamBox custom repository (may not exist on first build)
           @jambox https://jambox-it.github.io/aports/${ALPINE_VERSION}/JamBox/${{ matrix.arch }}
           EOF
