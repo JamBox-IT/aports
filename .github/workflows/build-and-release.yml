@@ -71,10 +71,78 @@ jobs:
           echo "has-changes=true" >> $GITHUB_OUTPUT
           echo "Changed packages: $PACKAGES"
 
-  build:
-    name: Build Packages
+  filter-existing:
+    name: Filter Already-Built Packages
     needs: detect-changes
     if: needs.detect-changes.outputs.has-changes == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.filter.outputs.packages }}
+      has-new: ${{ steps.filter.outputs.has-new }}
+      skipped-existing: ${{ steps.filter.outputs.skipped-existing }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Filter packages that already have releases
+        id: filter
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PACKAGES='${{ needs.detect-changes.outputs.packages }}'
+          ALPINE_VERSION="${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}"
+          NEW_PACKAGES=()
+          SKIPPED_EXISTING=()
+
+          echo "Checking which packages already have releases..."
+
+          for pkg_dir in $(echo "$PACKAGES" | jq -r '.[]'); do
+            if [ ! -f "$pkg_dir/APKBUILD" ]; then
+              echo "⚠️  No APKBUILD in $pkg_dir, skipping"
+              continue
+            fi
+
+            # Source APKBUILD to get version info
+            cd "$pkg_dir"
+            . ./APKBUILD
+            cd - > /dev/null
+
+            # Construct the release tag that would be created
+            release_tag="${pkgname}-${pkgver}-r${pkgrel}_alpine${ALPINE_VERSION}"
+
+            # Check if this release already exists
+            if gh release view "$release_tag" --repo "${{ github.repository }}" &>/dev/null; then
+              echo "⏭️  SKIP: $pkgname - release $release_tag already exists"
+              SKIPPED_EXISTING+=("$pkgname")
+            else
+              echo "🆕 BUILD: $pkgname - no release found for $release_tag"
+              NEW_PACKAGES+=("$pkg_dir")
+            fi
+          done
+
+          # Convert arrays to JSON
+          if [ ${#NEW_PACKAGES[@]} -eq 0 ]; then
+            echo "packages=[]" >> $GITHUB_OUTPUT
+            echo "has-new=false" >> $GITHUB_OUTPUT
+            echo "📦 All packages already have releases - nothing to build!"
+          else
+            PACKAGES_JSON=$(printf '%s\n' "${NEW_PACKAGES[@]}" | jq -R -s -c 'split("\n")[:-1]')
+            echo "packages=$PACKAGES_JSON" >> $GITHUB_OUTPUT
+            echo "has-new=true" >> $GITHUB_OUTPUT
+            echo "📦 Packages to build: ${NEW_PACKAGES[@]}"
+          fi
+
+          if [ ${#SKIPPED_EXISTING[@]} -gt 0 ]; then
+            SKIPPED_JSON=$(printf '%s\n' "${SKIPPED_EXISTING[@]}" | jq -R -s -c 'split("\n")[:-1]')
+            echo "skipped-existing=$SKIPPED_JSON" >> $GITHUB_OUTPUT
+            echo "⏭️  Skipped (already released): ${SKIPPED_EXISTING[@]}"
+          else
+            echo "skipped-existing=[]" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    name: Build Packages
+    needs: [detect-changes, filter-existing]
+    if: needs.filter-existing.outputs.has-new == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true  # Allow partial build failures
     strategy:
@@ -86,122 +154,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Alpine
-        uses: jirutka/setup-alpine@v1
+      - name: Setup Alpine Build Environment
+        uses: ./.github/actions/setup-alpine-build
         with:
           arch: ${{ matrix.arch }}
-          branch: ${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}
-          mirror-url: https://dl-cdn.alpinelinux.org/alpine
-          extra-repositories: https://dl-cdn.alpinelinux.org/alpine/${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}/community
-          packages: alpine-sdk abuild apk-tools jq
-
-      - name: Setup abuild user and permissions
-        shell: alpine.sh --root {0}
-        run: |
-          # Ensure abuild group exists
-          addgroup abuild 2>/dev/null || true
-
-          # Add runner user to abuild group
-          adduser runner abuild 2>/dev/null || true
-
-          # Fix permissions for build directories
-          chown -R runner:abuild /var/cache/distfiles
-          chmod -R 775 /var/cache/distfiles
-
-      - name: Configure APK repositories
-        shell: alpine.sh --root {0}
-        run: |
-          # Determine version from branch
-          BRANCH="${GITHUB_REF#refs/heads/}"
-          [ "$BRANCH" = "main" ] && ALPINE_VERSION="edge" || ALPINE_VERSION="$BRANCH"
-
-          # Install JamBox public key
-          echo "${{ secrets.RSA_PUBLIC_KEY }}" > /etc/apk/keys/jambox.rsa.pub
-          chmod 644 /etc/apk/keys/jambox.rsa.pub
-
-          # Configure /etc/apk/repositories
-          cat > /etc/apk/repositories << EOF
-          # Alpine main repository
-          https://dl-cdn.alpinelinux.org/alpine/${ALPINE_VERSION}/main
-          # Alpine community repository
-          https://dl-cdn.alpinelinux.org/alpine/${ALPINE_VERSION}/community
-          # Alpine testing repository (commented out - doesn't hold previous builds)
-          # https://dl-cdn.alpinelinux.org/alpine/edge/testing
-          # JamBox custom repository (may not exist on first build)
-          @jambox https://jambox-it.github.io/aports/${ALPINE_VERSION}/JamBox/${{ matrix.arch }}
-          EOF
-
-          cat /etc/apk/repositories
-          apk update || true
-
-      - name: Configure abuild
-        shell: alpine.sh {0}
-        run: |
-          # Create build directories
-          mkdir -p ~/.abuild
-
-          # Set architecture
-          echo "CARCH=${{ matrix.arch }}" >> ~/.abuild/abuild.conf
-          echo "JOBS=$(nproc)" >> ~/.abuild/abuild.conf
-
-          # Install RSA keys with fingerprint-based filename
-          echo "${{ secrets.RSA_PRIVATE_KEY }}" > ~/.abuild/jambox-65ea124a.rsa
-          chmod 600 ~/.abuild/jambox-65ea124a.rsa
-
-          echo "${{ secrets.RSA_PUBLIC_KEY }}" > ~/.abuild/jambox-65ea124a.rsa.pub
-          chmod 644 ~/.abuild/jambox-65ea124a.rsa.pub
-
-          # Validate keys using openssl
-          echo "Validating signing keys..."
-          if openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -check -noout 2>&1; then
-            echo "  ✓ Private key is valid"
-            openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -text -noout 2>&1 | grep "Private-Key:"
-          else
-            echo "  ✗ Private key is INVALID"
-            exit 1
-          fi
-
-          if openssl rsa -pubin -in ~/.abuild/jambox-65ea124a.rsa.pub -text -noout 2>&1 | grep "Public-Key:"; then
-            echo "  ✓ Public key is valid"
-          else
-            echo "  ✗ Public key is INVALID"
-            exit 1
-          fi
-
-          PRIV_MOD=$(openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -modulus -noout 2>/dev/null | md5sum)
-          PUB_MOD=$(openssl rsa -pubin -in ~/.abuild/jambox-65ea124a.rsa.pub -modulus -noout 2>/dev/null | md5sum)
-          if [ "$PRIV_MOD" = "$PUB_MOD" ]; then
-            echo "  ✓ Keys are a matching pair"
-          else
-            echo "  ✗ Keys DO NOT MATCH"
-            exit 1
-          fi
-
-          # Configure signing with fingerprint-based filename
-          echo "PACKAGER_PRIVKEY=~/.abuild/jambox-65ea124a.rsa" >> ~/.abuild/abuild.conf
-
-          echo "✓ Signing keys validated and configured"
-          ls -la ~/.abuild/
-
-      - name: Install public key to system keyring
-        shell: alpine.sh --root {0}
-        run: |
-          # Install public key for package verification
-          mkdir -p /etc/apk/keys
-          cp /home/runner/.abuild/jambox-65ea124a.rsa.pub /etc/apk/keys/
-          chmod 644 /etc/apk/keys/jambox-65ea124a.rsa.pub
-          echo "✓ Public key installed to system keyring"
-          ls -la /etc/apk/keys/jambox*
+          alpine-version: ${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}
+          rsa-private-key: ${{ secrets.RSA_PRIVATE_KEY }}
+          rsa-public-key: ${{ secrets.RSA_PUBLIC_KEY }}
 
       - name: Build packages for ${{ matrix.arch }}
         shell: alpine.sh {0}
         continue-on-error: true
         run: |
-          PACKAGES='${{ needs.detect-changes.outputs.packages }}'
+          PACKAGES='${{ needs.filter-existing.outputs.packages }}'
           BUILD_FAILED=0
           FAILED_PACKAGES=""
           SUCCESSFUL_PACKAGES=""
           SKIPPED_PACKAGES=""
+          SKIPPED_EXISTING='${{ needs.filter-existing.outputs.skipped-existing }}'
 
           # Find the actual repository path
           REPO_PATH="${GITHUB_WORKSPACE:-/home/runner/work/aports/aports}"
@@ -269,6 +239,10 @@ jobs:
           if [ -n "$SKIPPED_PACKAGES" ]; then
             echo "⏭️  Skipped (arch not supported): $SKIPPED_PACKAGES"
           fi
+          if [ -n "$SKIPPED_EXISTING" ] && [ "$SKIPPED_EXISTING" != "[]" ]; then
+            EXISTING_LIST=$(echo "$SKIPPED_EXISTING" | jq -r '.[]' | tr '\n' ' ')
+            echo "📦 Skipped (already released): $EXISTING_LIST"
+          fi
           echo "========================================="
 
           # Save build status to file for later steps
@@ -279,6 +253,7 @@ jobs:
           SUCCESSFUL=$SUCCESSFUL_PACKAGES
           FAILED=$FAILED_PACKAGES
           SKIPPED=$SKIPPED_PACKAGES
+          SKIPPED_EXISTING=$SKIPPED_EXISTING
           EOF
 
           if [ $BUILD_FAILED -ne 0 ]; then
@@ -370,6 +345,11 @@ jobs:
                 echo "⏭️  **Skipped (not for this arch):**$SKIPPED" >> $GITHUB_STEP_SUMMARY
               fi
 
+              if [ -n "$SKIPPED_EXISTING" ] && [ "$SKIPPED_EXISTING" != "[]" ]; then
+                EXISTING_LIST=$(echo "$SKIPPED_EXISTING" | jq -r '.[]' | tr '\n' ' ')
+                echo "📦 **Skipped (already released):**$EXISTING_LIST" >> $GITHUB_STEP_SUMMARY
+              fi
+
               echo "" >> $GITHUB_STEP_SUMMARY
             done
           done
@@ -379,8 +359,8 @@ jobs:
 
   create-release:
     name: Create GitHub Releases
-    needs: [detect-changes, build]
-    if: needs.detect-changes.outputs.has-changes == 'true' && !cancelled()
+    needs: [detect-changes, filter-existing, build]
+    if: needs.filter-existing.outputs.has-new == 'true' && !cancelled()
     uses: ./.github/workflows/create-releases.yml
     permissions:
       contents: write
@@ -390,8 +370,8 @@ jobs:
 
   publish-repository:
     name: Publish to Alpine Repository
-    needs: [detect-changes, build]
-    if: needs.detect-changes.outputs.has-changes == 'true' && !cancelled()
+    needs: [detect-changes, filter-existing, build]
+    if: needs.filter-existing.outputs.has-new == 'true' && !cancelled()
     uses: ./.github/workflows/publish-repository.yml
     permissions:
       contents: write
