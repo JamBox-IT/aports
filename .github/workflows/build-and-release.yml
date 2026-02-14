@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'v*'  # Match v3.19, v3.20, etc. (Alpine standard)
+      - workflow-improvements  # Temporary for testing
     # Only trigger on actual package changes
     paths:
       - 'JamBox/*/APKBUILD'
