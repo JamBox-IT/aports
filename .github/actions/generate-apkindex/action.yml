@@ -21,23 +21,42 @@ runs:
           -v "${{ github.workspace }}/.abuild-keys:/keys:ro" \
           -w /repo \
           alpine:latest sh -c '
-            apk add --no-cache abuild
+            apk add --no-cache abuild apk-tools
 
-            # Install JamBox public key for signature verification
-            mkdir -p /etc/apk/keys
-            cp /keys/jambox.rsa.pub /etc/apk/keys/
+            # Install JamBox public key to keyring with correct fingerprint-based filename
+            # apk key add automatically extracts the key ID and installs with the correct name
+            echo "Installing public key to keyring..."
+            if ! apk key add /keys/jambox.rsa.pub; then
+              echo "WARNING: apk key add failed, attempting manual installation"
+              mkdir -p /etc/apk/keys
+              cp /keys/jambox.rsa.pub /etc/apk/keys/jambox.rsa.pub
+            fi
+
+            echo "✓ Public key installed"
+            echo "Installed keys:"
+            ls -la /etc/apk/keys/ || echo "  (no keys directory)"
 
             for arch in x86_64 aarch64 armv7 armhf; do
               if [ -d "JamBox/${arch}" ] && ls JamBox/${arch}/*.apk >/dev/null 2>&1; then
                 cd "JamBox/${arch}"
                 PKG_COUNT=$(ls -1 *.apk | wc -l)
+                echo ""
                 echo "Generating APKINDEX for ${arch} (${PKG_COUNT} packages)..."
-                # Now apk index can verify signatures with the public key
-                apk index -o APKINDEX.tar.gz *.apk
-                echo "  ✓ APKINDEX created for ${arch}"
+
+                # Generate APKINDEX - apk index will verify signatures using installed public key
+                if apk index -o APKINDEX.tar.gz *.apk; then
+                  echo "✓ APKINDEX created and signatures verified for ${arch}"
+                else
+                  RESULT=$?
+                  echo "✗ FAILED to generate APKINDEX for ${arch} (exit code: $RESULT)"
+                  exit $RESULT
+                fi
                 cd /repo
               else
                 echo "  ✗ No packages for ${arch}"
               fi
             done
+
+            echo ""
+            echo "✓ All APKINDEX files generated successfully"
           '

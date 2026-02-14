@@ -41,15 +41,21 @@ jobs:
       - name: Setup signing keys
         run: |
           mkdir -p ~/.abuild
-
-          # Install RSA public key for package verification
-          echo "${{ secrets.RSA_PUBLIC_KEY }}" > ~/.abuild/jambox.rsa.pub
-          chmod 644 ~/.abuild/jambox.rsa.pub
-
-          # Also place in a location accessible to Docker
           mkdir -p .abuild-keys
+
+          # Install RSA public key for package verification in Docker
           echo "${{ secrets.RSA_PUBLIC_KEY }}" > .abuild-keys/jambox.rsa.pub
           chmod 644 .abuild-keys/jambox.rsa.pub
+
+          # Verify the key file exists and is readable
+          if [ ! -f .abuild-keys/jambox.rsa.pub ]; then
+            echo "ERROR: Public key not found in .abuild-keys/"
+            exit 1
+          fi
+
+          echo "✓ Public key staged for Docker container"
+          echo "  Location: .abuild-keys/jambox.rsa.pub"
+          echo "  Size: $(wc -c < .abuild-keys/jambox.rsa.pub) bytes"
 
       - name: Download build artifacts (if called from build workflow)
         continue-on-error: true
