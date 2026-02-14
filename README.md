@@ -95,15 +95,6 @@ Coming soon: Hosted Alpine repository for easier installation
 
 ---
 
-## Documentation
-
-- **CI/CD Setup:** `../DEV_DOC/CICD_SETUP_GUIDE.md`
-- **Quick Start:** `../DEV_DOC/CICD_QUICK_START.md`
-- **Claude Guide:** `../CLAUDE.md`
-- **Kanidm RADIUS:** `../DEV_DOC/ALPINE_RADIUS_PACKAGE_TODO.md`
-
----
-
 ## Workflow Status
 
 Check current build status: [Actions Tab](https://github.com/JamBox-IT/aports/actions)
