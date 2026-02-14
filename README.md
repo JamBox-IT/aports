@@ -5,7 +5,7 @@ Alpine Linux packages for JamBox IoT platform and related tools.
 ## Build Status
 
 | Branch | Status |
-|--------|----------------|--------|
+|--------|----------------|
 | `main` | [![Build](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml/badge.svg?branch=main)](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml?query=branch%3Amain) |
 | `v3.19` | [![Build](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml/badge.svg?branch=v3.19)](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml?query=branch%3Av3.19) |
 | `v3.23` | [![Build](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml/badge.svg?branch=v3.23)](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml?query=branch%3Av3.23) |
