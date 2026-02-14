@@ -83,9 +83,9 @@ jobs:
         uses: jirutka/setup-alpine@v1
         with:
           arch: ${{ matrix.arch }}
-          branch: latest-stable
+          branch: ${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}
           mirror-url: https://dl-cdn.alpinelinux.org/alpine
-          extra-repositories: https://dl-cdn.alpinelinux.org/alpine/latest-stable/community
+          extra-repositories: https://dl-cdn.alpinelinux.org/alpine/${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}/community
           packages: alpine-sdk abuild apk-tools jq
 
       - name: Setup abuild user and permissions
