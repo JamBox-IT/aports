@@ -24,12 +24,11 @@ runs:
             apk add --no-cache abuild apk-tools
 
             # Install JamBox public key to keyring with correct fingerprint-based filename
-            # apk key add automatically extracts the key ID and installs with the correct name
             echo "Installing public key to keyring..."
-            if ! apk key add /keys/jambox.rsa.pub; then
+            if ! apk key add /keys/jambox-65ea124a.rsa.pub; then
               echo "WARNING: apk key add failed, attempting manual installation"
               mkdir -p /etc/apk/keys
-              cp /keys/jambox.rsa.pub /etc/apk/keys/jambox.rsa.pub
+              cp /keys/jambox-65ea124a.rsa.pub /etc/apk/keys/jambox-65ea124a.rsa.pub
             fi
 
             echo "✓ Public key installed"
