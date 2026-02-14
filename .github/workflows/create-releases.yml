@@ -1,0 +1,78 @@
+name: Create GitHub Releases
+
+on:
+  workflow_call:
+    inputs:
+      alpine-version:
+        required: true
+        type: string
+        description: Alpine version (edge, v3.19, etc.)
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-packages
+
+      - name: Organize packages by architecture
+        run: |
+          mkdir -p packages
+          for arch_dir in all-packages/packages-*/; do
+            arch=$(basename "$arch_dir" | sed 's/packages-//')
+            # Create architecture-specific subdirectories
+            mkdir -p "packages/${arch}"
+            # Copy packages to arch subdirectory AND create arch-suffixed files for release
+            for pkg in "$arch_dir"*.apk; do
+              if [ -f "$pkg" ]; then
+                pkgname=$(basename "$pkg" .apk)
+                # For release attachments (with arch in filename)
+                cp "$pkg" "packages/${pkgname}-${arch}.apk"
+                # For Alpine repo structure (in arch subdirectory)
+                cp "$pkg" "packages/${arch}/"
+              fi
+            done
+          done
+          ls -la packages/
+          ls -la packages/*/
+
+      - name: Generate SBOM
+        run: |
+          cat > PACKAGES.txt << EOF
+          # JamBox Alpine Linux Packages
+          # Built: $(date)
+          # Commit: ${{ github.sha }}
+
+          EOF
+
+          echo "## Packages" >> PACKAGES.txt
+          ls -1 packages/*.apk 2>/dev/null | xargs -I {} basename {} >> PACKAGES.txt || true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: packages/*.apk
+          body_path: PACKAGES.txt
+          draft: false
+          prerelease: false
+          tag_name: v${{ github.run_number }}
+          name: Release ${{ github.run_number }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload packages as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-release-packages
+          path: packages/
+          retention-days: 90
