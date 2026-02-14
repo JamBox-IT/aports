@@ -1,7 +1,7 @@
 maintainer="Corey DeLasaux <cordelster@gmail.com>"
 pkgname=kanidm
 pkgver=1.8.6
-pkgrel=1
+pkgrel=2
 pkgdesc="A identity management server, acting as an authority on account information"
 url="https://kanidm.github.io"
 arch="all !x86 !armhf !armv7 !riscv64"
@@ -33,6 +33,7 @@ install="
 subpackages="
 	$pkgname-bash-completion
 	$pkgname-clients
+	$pkgname-ipa-sync:ipa_sync
 	$pkgname-ldap-sync:ldap_sync
 	$pkgname-openrc
 	$pkgname-radiusd:radiusd
@@ -115,7 +116,6 @@ server() {
 	depends=""
 
 	install -Dm755 "$builddir"/target/release/kanidmd -t "$subpkgdir"/usr/bin/
-	install -Dm755 "$builddir"/target/release/kanidm-ipa-sync -t "$subpkgdir"/usr/bin/
 	install -Dm644 "$builddir"/examples/server.toml -t "$subpkgdir"/etc/kanidm/
 
 	install -dv "$subpkgdir"/usr/share/kanidm/ui/hpkg
@@ -143,6 +143,13 @@ ldap_sync() {
 	depends="$pkgname-clients"
 
 	install -Dm755 "$builddir"/target/release/kanidm-ldap-sync -t "$subpkgdir"/usr/bin/
+}
+
+ipa_sync() {
+	pkgdesc="Kanidm IPA sync tool for migrating/sync from FreeIPA directories"
+	depends="$pkgname-clients"
+
+	install -Dm755 "$builddir"/target/release/kanidm-ipa-sync -t "$subpkgdir"/usr/bin/
 }
 
 radiusd() {
