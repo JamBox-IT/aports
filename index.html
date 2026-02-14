@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JamBox Alpine Linux Packages</title>
+    <link href="https://fonts.googleapis.com/css?family=Nunito:300,400,700" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@ajusa/lit@latest/dist/lit.css" />
+    <style>
+      body { max-width: 1000px; margin: 0 auto; padding: 2rem; }
+      .hero { text-align: center; margin: 3rem 0; }
+      .badge { display: inline-block; margin: 0 0.5rem; }
+      code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; }
+      pre { background: #f4f4f4; padding: 1rem; border-radius: 5px; overflow-x: auto; }
+      .package-list { list-style: none; padding: 0; }
+      .package-list li { padding: 0.5rem 0; border-bottom: 1px solid #eee; }
+      .warning { background: #fff3cd; border-left: 4px solid #ffc107; padding: 1rem; margin: 1rem 0; }
+    </style>
+  </head>
+  <body class="c">
+    <div class="hero">
+      <h1>JamBox Alpine Linux Packages</h1>
+      <p>Custom Alpine Linux packages for IoT, identity management, and embedded systems</p>
+
+      <div>
+        <a href="https://github.com/JamBox-IT/aports" class="badge">
+          <img src="https://img.shields.io/github/actions/workflow/status/JamBox-IT/aports/build-and-release.yml?label=build&style=flat-square" alt="Build Status">
+        </a>
+        <a href="https://github.com/JamBox-IT/aports/releases" class="badge">
+          <img src="https://img.shields.io/github/v/release/JamBox-IT/aports?style=flat-square" alt="Latest Release">
+        </a>
+      </div>
+    </div>
+
+    <hr />
+
+    <h2>📦 Available Packages</h2>
+    <ul class="package-list">
+      <li><strong>kanidm</strong> - Modern identity management and authentication platform</li>
+      <li><strong>jambox-keys</strong> - JamBox package signing keys</li>
+      <li><strong>py3-mppsolar</strong> - Solar inverter communication library</li>
+      <li><strong>py3-meshtastic</strong> - Meshtastic mesh radio communication</li>
+      <li><strong>prometheus exporters</strong> - Weather data and mesh metrics exporters</li>
+      <li><strong>alpine-jbase</strong> - JamBox system tools and configuration</li>
+      <li><strong>acf-jbskin</strong> - Alpine Configuration Framework JamBox theme</li>
+    </ul>
+
+    <hr />
+
+    <h2>🚀 Installation</h2>
+
+    <h3>Method 1: Add as APK Repository (Recommended)</h3>
+    <p>Add the JamBox repository to your Alpine system:</p>
+    <pre><code># Install the jambox-keys package (contains signing key)
+# First download and install manually:
+wget https://github.com/JamBox-IT/aports/releases/latest/download/jambox-keys-0.2-r0-$(uname -m).apk
+apk add --allow-untrusted jambox-keys-*.apk
+
+# Or install the key directly:
+wget -O /etc/apk/keys/jambox-65ea124a.rsa.pub \
+  https://raw.githubusercontent.com/JamBox-IT/aports/main/JamBox/jambox-keys/jambox-65ea124a.rsa.pub
+
+# Add repository for your Alpine version:
+# For Alpine Edge:
+echo "@jambox https://jambox-it.github.io/aports/edge/JamBox/$(uname -m)" >> /etc/apk/repositories
+
+# For Alpine v3.19:
+echo "@jambox https://jambox-it.github.io/aports/v3.19/JamBox/$(uname -m)" >> /etc/apk/repositories
+
+# Update and install packages
+apk update
+apk add kanidm@jambox py3-mppsolar@jambox</code></pre>
+
+    <div class="warning">
+      <strong>⚠️ Version Pinning:</strong> This repository maintains all historical package versions.
+      You can pin specific versions:
+      <pre><code>apk add kanidm=1.8.6-r1@jambox</code></pre>
+    </div>
+
+    <h3>Method 2: From GitHub Releases</h3>
+    <p>Download individual packages from the <a href="https://github.com/JamBox-IT/aports/releases/latest">Releases page</a>:</p>
+    <pre><code># Download for your architecture
+wget https://github.com/JamBox-IT/aports/releases/latest/download/&lt;package&gt;-&lt;version&gt;-&lt;arch&gt;.apk
+
+# Install with the key
+apk add --allow-untrusted &lt;package&gt;.apk</code></pre>
+
+    <hr />
+
+    <h2>🏗️ Multi-Architecture Support</h2>
+    <p>All packages are built for multiple architectures:</p>
+    <ul>
+      <li><strong>x86_64</strong> - Intel/AMD 64-bit</li>
+      <li><strong>aarch64</strong> - ARM 64-bit (Raspberry Pi 4, etc.)</li>
+      <li><strong>armv7</strong> - ARM 32-bit (Raspberry Pi 3, etc.)</li>
+      <li><strong>armhf</strong> - ARM Hard Float</li>
+    </ul>
+
+    <hr />
+
+    <h2>📍 Repository Structure</h2>
+    <p>Packages are organized by Alpine version and architecture:</p>
+    <pre><code>https://jambox-it.github.io/aports/
+├── edge/JamBox/{x86_64,aarch64,armv7,armhf}/
+├── v3.21/JamBox/{x86_64,aarch64,armv7,armhf}/
+├── v3.20/JamBox/{x86_64,aarch64,armv7,armhf}/
+└── v3.19/JamBox/{x86_64,aarch64,armv7,armhf}/</code></pre>
+
+    <hr />
+
+    <h2>🔑 Package Signing</h2>
+    <p>All packages are cryptographically signed with RSA-4096 keys. The signing key fingerprint is:</p>
+    <pre><code>jambox-65ea124a.rsa.pub</code></pre>
+    <p>Install the key from the jambox-keys package or directly:</p>
+    <pre><code>wget -O /etc/apk/keys/jambox-65ea124a.rsa.pub \
+  https://raw.githubusercontent.com/JamBox-IT/aports/main/JamBox/jambox-keys/jambox-65ea124a.rsa.pub</code></pre>
+
+    <hr />
+
+    <h2>📚 Documentation</h2>
+    <ul>
+      <li><a href="https://github.com/JamBox-IT/aports/blob/main/README.md">README</a> - Repository overview</li>
+      <li><a href="https://github.com/JamBox-IT/aports/blob/main/DEV_DOC/">Developer Documentation</a> - Build guides and CI/CD setup</li>
+      <li><a href="https://github.com/JamBox-IT/aports/actions">GitHub Actions</a> - Build logs</li>
+      <li><a href="https://github.com/JamBox-IT/aports/releases">Releases</a> - Download packages</li>
+      <li><a href="https://github.com/JamBox-IT/aports/issues">Issues</a> - Report problems</li>
+    </ul>
+
+    <hr />
+
+    <h2>🛠️ Contributing</h2>
+    <p>Contributions are welcome! See the <a href="https://github.com/JamBox-IT/aports">repository</a> for details.</p>
+
+    <hr />
+
+    <footer style="text-align: center; margin-top: 3rem; color: #666;">
+      <p>
+        Maintained by <a href="https://github.com/JamBox-IT">JamBox IT</a><br>
+        <small>Built with GitHub Actions • Packaged for Alpine Linux • All historical versions retained</small>
+      </p>
+    </footer>
+  </body>
+</html>
