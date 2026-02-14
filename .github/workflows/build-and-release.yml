@@ -170,15 +170,20 @@ jobs:
             exit 1
           fi
 
-          # Install public key to system keyring for package verification
-          doas mkdir -p /etc/apk/keys
-          doas cp ~/.abuild/jambox-65ea124a.rsa.pub /etc/apk/keys/
-
           # Configure signing with fingerprint-based filename
           echo "PACKAGER_PRIVKEY=~/.abuild/jambox-65ea124a.rsa" >> ~/.abuild/abuild.conf
 
           echo "✓ Signing keys validated and configured"
           ls -la ~/.abuild/
+
+      - name: Install public key to system keyring
+        shell: alpine.sh --root {0}
+        run: |
+          # Install public key for package verification
+          mkdir -p /etc/apk/keys
+          cp /home/runner/.abuild/jambox-65ea124a.rsa.pub /etc/apk/keys/
+          chmod 644 /etc/apk/keys/jambox-65ea124a.rsa.pub
+          echo "✓ Public key installed to system keyring"
           ls -la /etc/apk/keys/jambox*
 
       - name: Build packages for ${{ matrix.arch }}
