@@ -4,11 +4,13 @@ Alpine Linux packages for JamBox IoT platform and related tools.
 
 ## Build Status
 
-[![main (Alpine edge)](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml/badge.svg?branch=main)](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml?query=branch%3Amain)
-[![v3.19 (Alpine 3.19)](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml/badge.svg?branch=v3.19)](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml?query=branch%3Av3.19)
-[![v3.23 (Alpine 3.23)](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml/badge.svg?branch=v3.23)](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml?query=branch%3Av3.23)
+| Branch | Status |
+|--------|----------------|--------|
+| `main` | [![Build](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml/badge.svg?branch=main)](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml?query=branch%3Amain) |
+| `v3.19` | [![Build](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml/badge.svg?branch=v3.19)](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml?query=branch%3Av3.19) |
+| `v3.23` | [![Build](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml/badge.svg?branch=v3.23)](https://github.com/JamBox-IT/aports/actions/workflows/build-and-release.yml?query=branch%3Av3.23) |
 
-[![Package Validation](https://github.com/JamBox-IT/aports/actions/workflows/validate-packages.yml/badge.svg)](https://github.com/JamBox-IT/aports/actions/workflows/validate-packages.yml)
+**Validation:** [![Package Validation](https://github.com/JamBox-IT/aports/actions/workflows/validate-packages.yml/badge.svg)](https://github.com/JamBox-IT/aports/actions/workflows/validate-packages.yml)
 
 ---
 
