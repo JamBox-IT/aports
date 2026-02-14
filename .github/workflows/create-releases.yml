@@ -61,7 +61,7 @@ jobs:
               fi
 
               # Append Alpine version to tag to avoid conflicts between branches
-              release_tag="${pkgname}-${pkgver}-r${pkgrel}_alpine${{ inputs.alpine-version }}"
+              release_tag="${pkgname}-${pkgver}-r${pkgrel}_${{ inputs.alpine-version }}"
 
               # Skip if we already created this release
               if [ -n "${CREATED_RELEASES[$release_tag]}" ]; then
