@@ -1,7 +1,7 @@
 # Maintainer: Corey De Lasaux <cordelster@gmail.com>
 pkgname=jambox-keys
 pkgver=0.2
-pkgrel=5
+pkgrel=6
 pkgdesc="Public keys for JamBox Alpine Linux packages"
 url="https://alpinelinux.org"
 # we install arch specific keys to /etc so we cannot do arch=noarch
@@ -12,8 +12,6 @@ options="!check" # No testsuite
 
 _arch_keys="
 	x86,x86_64,aarch64,armhf,armv7:jambox-65ea124a.rsa.pub
-	x86,x86_64,aarch64,armhf,armv7:jambox-698d435a.rsa.pub
-	x86,x86_64,aarch64,armhf,armv7:jb-CAwEAAQ.pub
 	"
 
 for _i in $_arch_keys; do
@@ -95,6 +93,4 @@ package() {
 
 sha512sums="
 2883fb7022e436b83c07d55973e408abe7d66dec4d0ff09baa291f7a7aec6397af3e3bf9ed51276602cab283349de90bc759c483064b5101d3b8a5013493420c  jambox-65ea124a.rsa.pub
-0453c3fb16eb68e218683adaa338a3195b9be5fc4c8a7d2f2dc6b5016294025468409fab91ebcba9853b195ef7e7537ebb13e40f36350724dca34a57a0a5d4e1  jambox-698d435a.rsa.pub
-bc359f74107f077aa60d0366371d938288157b06c399ed5abc5f35f5e9b63aaf49541a5492c161e31b6de34305348b95059273956e0b030fac6713b542c9488a  jb-CAwEAAQ.pub
 "
