@@ -137,20 +137,19 @@ jobs:
           echo "CARCH=${{ matrix.arch }}" >> ~/.abuild/abuild.conf
           echo "JOBS=$(nproc)" >> ~/.abuild/abuild.conf
 
-          # Install RSA keys
-          echo "${{ secrets.RSA_PRIVATE_KEY }}" > ~/.abuild/jambox.rsa
-          chmod 600 ~/.abuild/jambox.rsa
+          # Install RSA keys with fingerprint-based filename
+          echo "${{ secrets.RSA_PRIVATE_KEY }}" > ~/.abuild/jambox-65ea124a.rsa
+          chmod 600 ~/.abuild/jambox-65ea124a.rsa
 
-          echo "${{ secrets.RSA_PUBLIC_KEY }}" > ~/.abuild/jambox.rsa.pub
-          chmod 644 ~/.abuild/jambox.rsa.pub
+          echo "${{ secrets.RSA_PUBLIC_KEY }}" > ~/.abuild/jambox-65ea124a.rsa.pub
+          chmod 644 ~/.abuild/jambox-65ea124a.rsa.pub
 
-          # Configure signing
-          echo "PRIVATE_KEY_PATH=~/.abuild/jambox.rsa" >> ~/.abuild/abuild.conf
-          echo "PACKAGER_PRIVKEY=~/.abuild/jambox.rsa" >> ~/.abuild/abuild.conf
+          # Configure signing with fingerprint-based filename
+          echo "PACKAGER_PRIVKEY=~/.abuild/jambox-65ea124a.rsa" >> ~/.abuild/abuild.conf
 
           # Verify keys are readable
-          test -f ~/.abuild/jambox.rsa || (echo "ERROR: Private key not found"; exit 1)
-          test -f ~/.abuild/jambox.rsa.pub || (echo "ERROR: Public key not found"; exit 1)
+          test -f ~/.abuild/jambox-65ea124a.rsa || (echo "ERROR: Private key not found"; exit 1)
+          test -f ~/.abuild/jambox-65ea124a.rsa.pub || (echo "ERROR: Public key not found"; exit 1)
 
       - name: Build packages for ${{ matrix.arch }}
         shell: alpine.sh {0}
