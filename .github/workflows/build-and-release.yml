@@ -144,12 +144,36 @@ jobs:
           echo "${{ secrets.RSA_PUBLIC_KEY }}" > ~/.abuild/jambox-65ea124a.rsa.pub
           chmod 644 ~/.abuild/jambox-65ea124a.rsa.pub
 
+          # Validate keys using openssl
+          echo "Validating signing keys..."
+          if openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -check -noout 2>&1; then
+            echo "  ✓ Private key is valid"
+            openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -text -noout 2>&1 | grep "Private-Key:"
+          else
+            echo "  ✗ Private key is INVALID"
+            exit 1
+          fi
+
+          if openssl rsa -pubin -in ~/.abuild/jambox-65ea124a.rsa.pub -text -noout 2>&1 | grep "Public-Key:"; then
+            echo "  ✓ Public key is valid"
+          else
+            echo "  ✗ Public key is INVALID"
+            exit 1
+          fi
+
+          PRIV_MOD=$(openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -modulus -noout 2>/dev/null | md5sum)
+          PUB_MOD=$(openssl rsa -pubin -in ~/.abuild/jambox-65ea124a.rsa.pub -modulus -noout 2>/dev/null | md5sum)
+          if [ "$PRIV_MOD" = "$PUB_MOD" ]; then
+            echo "  ✓ Keys are a matching pair"
+          else
+            echo "  ✗ Keys DO NOT MATCH"
+            exit 1
+          fi
+
           # Configure signing with fingerprint-based filename
           echo "PACKAGER_PRIVKEY=~/.abuild/jambox-65ea124a.rsa" >> ~/.abuild/abuild.conf
 
-          # Verify keys are readable
-          test -f ~/.abuild/jambox-65ea124a.rsa || (echo "ERROR: Private key not found"; exit 1)
-          test -f ~/.abuild/jambox-65ea124a.rsa.pub || (echo "ERROR: Public key not found"; exit 1)
+          echo "✓ Signing keys validated and configured"
 
       - name: Build packages for ${{ matrix.arch }}
         shell: alpine.sh {0}
