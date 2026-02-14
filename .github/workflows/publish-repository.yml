@@ -30,107 +30,108 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git configuration
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
 
       - name: Download build artifacts (if called from build workflow)
-        if: github.event_name == 'workflow_call'
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: packages-*
           path: new-packages
 
       - name: Organize new packages by architecture
-        if: github.event_name == 'workflow_call'
         run: |
           mkdir -p packages
-          for arch_dir in new-packages/packages-*/; do
-            if [ -d "$arch_dir" ]; then
-              arch=$(basename "$arch_dir" | sed 's/packages-//')
-              mkdir -p "packages/${arch}"
-              cp "$arch_dir"*.apk "packages/${arch}/" 2>/dev/null || true
-            fi
-          done
-          ls -la packages/*/
+          # Check if artifacts were downloaded
+          if [ -d "new-packages" ]; then
+            echo "Found build artifacts - organizing packages..."
+            for arch_dir in new-packages/packages-*/; do
+              if [ -d "$arch_dir" ]; then
+                arch=$(basename "$arch_dir" | sed 's/packages-//')
+                mkdir -p "packages/${arch}"
+                cp "$arch_dir"*.apk "packages/${arch}/" 2>/dev/null || true
+              fi
+            done
+            ls -la packages/*/ 2>/dev/null || echo "No packages organized"
+          else
+            echo "No build artifacts found (normal for manual workflow_dispatch)"
+          fi
 
-      - name: Download existing repository from GitHub Pages
+      - name: Sync existing repository from gh-pages branch
         run: |
           BRANCH="${{ inputs.alpine-version }}"
           mkdir -p "${BRANCH}/JamBox"
 
-          echo "Fetching existing repository for ${BRANCH}..."
+          echo "Fetching existing repository from gh-pages for ${BRANCH}..."
 
-          # Download existing packages from gh-pages if they exist
+          # Use git to atomically fetch existing packages from gh-pages
+          git fetch origin gh-pages --depth=1 2>/dev/null || {
+            echo "No gh-pages branch found (normal for first run)"
+            exit 0
+          }
+
+          # Sparse checkout only the Alpine version we need
+          git checkout origin/gh-pages -- "${BRANCH}/" 2>/dev/null || {
+            echo "No existing repository for ${BRANCH} (normal for first run)"
+            exit 0
+          }
+
+          # Count existing packages
+          echo ""
+          echo "Existing packages:"
           for arch in x86_64 aarch64 armv7 armhf; do
-            mkdir -p "${BRANCH}/JamBox/${arch}"
-            echo "Checking for existing ${arch} packages..."
-
-            # Try to download existing packages (will fail on first run, that's ok)
-            wget -q -r -np -nH -R "index.html*" \
-              --cut-dirs=2 \
-              -P "${BRANCH}/JamBox/${arch}/" \
-              "https://jambox-it.github.io/aports/${BRANCH}/JamBox/${arch}/" \
-              2>/dev/null || echo "No existing packages found for ${arch} (normal for first build)"
-
-            # Count existing packages
-            EXISTING=$(find "${BRANCH}/JamBox/${arch}" -name "*.apk" 2>/dev/null | wc -l)
-            echo "Found ${EXISTING} existing packages for ${arch}"
+            if [ -d "${BRANCH}/JamBox/${arch}" ]; then
+              COUNT=$(find "${BRANCH}/JamBox/${arch}" -name "*.apk" 2>/dev/null | wc -l)
+              echo "  ${arch}: ${COUNT} packages"
+            else
+              echo "  ${arch}: 0 packages"
+            fi
           done
 
-      - name: Merge and index packages
+      - name: Merge new packages with existing repository
         run: |
           BRANCH="${{ inputs.alpine-version }}"
-          echo "Building repository for Alpine version: ${BRANCH}"
+          echo "=== Merging new packages with existing repository ==="
 
-          # Use Alpine container to create APKINDEX (apk-tools not in Ubuntu repos)
-          docker run --rm \
-            -v "$PWD/packages:/new-packages:ro" \
-            -v "$PWD/${BRANCH}:/repo" \
-            -w /repo \
-            alpine:latest sh -c '
-            apk add --no-cache abuild
+          # Ensure JamBox directories exist for all architectures
+          for arch in x86_64 aarch64 armv7 armhf; do
+            mkdir -p "${BRANCH}/JamBox/${arch}"
 
-            echo "=== Merging new packages with existing repository ==="
+            BEFORE=$(find "${BRANCH}/JamBox/${arch}" -name "*.apk" 2>/dev/null | wc -l)
 
-            # Process each architecture
-            for arch in x86_64 aarch64 armv7 armhf; do
-              mkdir -p JamBox/${arch}
+            # Copy new packages (overwrites old versions with same name)
+            if [ -d "packages/${arch}" ] && ls packages/${arch}/*.apk 2>/dev/null | head -1 >/dev/null; then
+              echo "Adding new packages for ${arch}..."
+              cp packages/${arch}/*.apk "${BRANCH}/JamBox/${arch}/"
+              AFTER=$(find "${BRANCH}/JamBox/${arch}" -name "*.apk" 2>/dev/null | wc -l)
+              NEW=$((AFTER - BEFORE))
+              echo "  Added/updated ${NEW} packages (${BEFORE} → ${AFTER} total)"
+            else
+              echo "No new packages for ${arch} (${BEFORE} existing)"
+            fi
+          done
 
-              BEFORE=$(ls -1 JamBox/${arch}/*.apk 2>/dev/null | wc -l)
+      - name: Generate APKINDEX files
+        uses: ./.github/actions/generate-apkindex
+        with:
+          alpine-version: ${{ inputs.alpine-version }}
 
-              # Copy new packages (overwrites old versions with same name)
-              if [ -d "/new-packages/${arch}" ] && ls /new-packages/${arch}/*.apk 2>/dev/null | head -1 >/dev/null; then
-                echo "Adding new packages for ${arch}..."
-                cp /new-packages/${arch}/*.apk JamBox/${arch}/
-                AFTER=$(ls -1 JamBox/${arch}/*.apk 2>/dev/null | wc -l)
-                NEW=$((AFTER - BEFORE))
-                echo "  Added/updated ${NEW} packages"
-              else
-                AFTER=$BEFORE
-                echo "  No new packages for ${arch}"
-              fi
+      - name: Validate APKINDEX integrity
+        uses: ./.github/actions/validate-apkindex
+        with:
+          alpine-version: ${{ inputs.alpine-version }}
 
-              # Regenerate APKINDEX with ALL packages
-              cd JamBox/${arch}
-              if [ $AFTER -gt 0 ]; then
-                echo "  Generating APKINDEX for ${AFTER} total packages..."
-                apk index -o APKINDEX.tar.gz *.apk
-                echo "  ✓ APKINDEX created for ${arch}"
-              else
-                echo "  ✗ No packages for ${arch}"
-              fi
-              cd /repo
-
-              echo ""
-            done
-
-            echo "=== Repository Summary ==="
-            for arch in x86_64 aarch64 armv7 armhf; do
-              COUNT=$(ls -1 JamBox/${arch}/*.apk 2>/dev/null | wc -l)
-              echo "${arch}: ${COUNT} packages"
-            done
-          '
-
+      - name: Repository summary
+        run: |
+          BRANCH="${{ inputs.alpine-version }}"
           echo ""
-          echo "Final repository structure for ${BRANCH}:"
+          echo "=== Final Repository Summary for ${BRANCH} ==="
           for arch in x86_64 aarch64 armv7 armhf; do
             COUNT=$(find "${BRANCH}/JamBox/${arch}" -name "*.apk" 2>/dev/null | wc -l)
             echo "  ${arch}: ${COUNT} packages"

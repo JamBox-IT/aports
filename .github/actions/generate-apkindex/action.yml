@@ -1,0 +1,37 @@
+name: Generate APKINDEX
+description: Generate APKINDEX files for all Alpine package architectures
+
+inputs:
+  alpine-version:
+    required: true
+    description: Alpine version (edge, v3.20, etc.)
+
+runs:
+  using: composite
+  steps:
+    - name: Generate APKINDEX files
+      shell: bash
+      run: |
+        ALPINE_VER="${{ inputs.alpine-version }}"
+
+        echo "=== Generating APKINDEX for Alpine ${ALPINE_VER} ==="
+
+        docker run --rm \
+          -v "${{ github.workspace }}/${ALPINE_VER}:/repo" \
+          -w /repo \
+          alpine:latest sh -c '
+            apk add --no-cache abuild
+
+            for arch in x86_64 aarch64 armv7 armhf; do
+              if [ -d "JamBox/${arch}" ] && ls JamBox/${arch}/*.apk >/dev/null 2>&1; then
+                cd "JamBox/${arch}"
+                PKG_COUNT=$(ls -1 *.apk | wc -l)
+                echo "Generating APKINDEX for ${arch} (${PKG_COUNT} packages)..."
+                apk index -o APKINDEX.tar.gz *.apk
+                echo "  ✓ APKINDEX created for ${arch}"
+                cd /repo
+              else
+                echo "  ✗ No packages for ${arch}"
+              fi
+            done
+          '

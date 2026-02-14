@@ -1,0 +1,69 @@
+name: Validate APKINDEX
+description: Verify APKINDEX integrity and package consistency
+
+inputs:
+  alpine-version:
+    required: true
+    description: Alpine version (edge, v3.20, etc.)
+
+runs:
+  using: composite
+  steps:
+    - name: Validate APKINDEX files
+      shell: bash
+      run: |
+        ALPINE_VER="${{ inputs.alpine-version }}"
+
+        echo "=== Validating APKINDEX for Alpine ${ALPINE_VER} ==="
+
+        docker run --rm \
+          -v "${{ github.workspace }}/${ALPINE_VER}:/repo:ro" \
+          -w /repo \
+          alpine:latest sh -c '
+            apk add --no-cache apk-tools tar
+
+            ERRORS=0
+
+            for arch in x86_64 aarch64 armv7 armhf; do
+              if [ -f "JamBox/${arch}/APKINDEX.tar.gz" ]; then
+                echo "Validating APKINDEX for ${arch}..."
+
+                # Verify tar.gz is valid
+                if ! tar -tzf "JamBox/${arch}/APKINDEX.tar.gz" >/dev/null 2>&1; then
+                  echo "  ✗ ERROR: Invalid APKINDEX.tar.gz for ${arch}"
+                  ERRORS=$((ERRORS + 1))
+                  continue
+                fi
+
+                # Count packages in filesystem
+                PKG_COUNT=$(ls -1 JamBox/${arch}/*.apk 2>/dev/null | wc -l)
+
+                # Extract and count entries in APKINDEX
+                INDEX_COUNT=$(tar -xzf "JamBox/${arch}/APKINDEX.tar.gz" -O APKINDEX 2>/dev/null | grep -c "^P:" || echo "0")
+
+                echo "  Packages: ${PKG_COUNT}, Indexed: ${INDEX_COUNT}"
+
+                if [ "$PKG_COUNT" -ne "$INDEX_COUNT" ]; then
+                  echo "  ⚠ WARNING: Package count mismatch for ${arch}"
+                  # Not a hard error - some packages might be subpackages
+                fi
+
+                echo "  ✓ APKINDEX valid for ${arch}"
+              elif [ -d "JamBox/${arch}" ]; then
+                PKG_COUNT=$(ls -1 JamBox/${arch}/*.apk 2>/dev/null | wc -l)
+                if [ $PKG_COUNT -gt 0 ]; then
+                  echo "  ✗ ERROR: ${arch} has ${PKG_COUNT} packages but no APKINDEX"
+                  ERRORS=$((ERRORS + 1))
+                fi
+              fi
+            done
+
+            if [ $ERRORS -gt 0 ]; then
+              echo ""
+              echo "✗ Validation failed with ${ERRORS} error(s)"
+              exit 1
+            fi
+
+            echo ""
+            echo "✓ All APKINDEX files validated successfully"
+          '
