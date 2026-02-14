@@ -15,6 +15,7 @@ makedepends="
 	bash
 	bc
 	brotli
+	cargo
 	cargo-auditable
 	clang-dev
 	cmake
