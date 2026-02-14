@@ -1,0 +1,129 @@
+name: 'Setup Alpine Build Environment'
+description: 'Configures Alpine Linux with abuild, signing keys, and package repositories for building Alpine packages'
+author: 'JamBox-IT'
+
+inputs:
+  arch:
+    description: 'Target architecture (x86_64, aarch64, armv7, armhf)'
+    required: true
+  alpine-version:
+    description: 'Alpine version (edge, v3.19, v3.20, etc.)'
+    required: true
+  rsa-private-key:
+    description: 'RSA private key for package signing'
+    required: true
+  rsa-public-key:
+    description: 'RSA public key for package verification'
+    required: true
+  mirror-url:
+    description: 'Alpine mirror URL'
+    required: false
+    default: 'https://dl-cdn.alpinelinux.org/alpine'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Alpine Linux
+      uses: jirutka/setup-alpine@v1
+      with:
+        arch: ${{ inputs.arch }}
+        branch: ${{ inputs.alpine-version }}
+        mirror-url: ${{ inputs.mirror-url }}
+        extra-repositories: ${{ inputs.mirror-url }}/${{ inputs.alpine-version }}/community
+        packages: alpine-sdk abuild apk-tools jq
+
+    - name: Setup abuild user and permissions
+      shell: alpine.sh --root {0}
+      run: |
+        # Ensure abuild group exists
+        addgroup abuild 2>/dev/null || true
+
+        # Add runner user to abuild group
+        adduser runner abuild 2>/dev/null || true
+
+        # Fix permissions for build directories
+        chown -R runner:abuild /var/cache/distfiles
+        chmod -R 775 /var/cache/distfiles
+
+    - name: Configure APK repositories
+      shell: alpine.sh --root {0}
+      run: |
+        ALPINE_VERSION="${{ inputs.alpine-version }}"
+
+        # Install JamBox public key
+        echo "${{ inputs.rsa-public-key }}" > /etc/apk/keys/jambox.rsa.pub
+        chmod 644 /etc/apk/keys/jambox.rsa.pub
+
+        # Configure /etc/apk/repositories
+        cat > /etc/apk/repositories << EOF
+        # Alpine main repository
+        ${{ inputs.mirror-url }}/${ALPINE_VERSION}/main
+        # Alpine community repository
+        ${{ inputs.mirror-url }}/${ALPINE_VERSION}/community
+        # Alpine testing repository (needed for packages in testing/)
+        ${{ inputs.mirror-url }}/${ALPINE_VERSION}/testing
+        # JamBox custom repository (may not exist on first build)
+        @jambox https://jambox-it.github.io/aports/${ALPINE_VERSION}/JamBox/${{ inputs.arch }}
+        EOF
+
+        cat /etc/apk/repositories
+        apk update || true
+
+    - name: Configure abuild
+      shell: alpine.sh {0}
+      run: |
+        # Create build directories
+        mkdir -p ~/.abuild
+
+        # Set architecture
+        echo "CARCH=${{ inputs.arch }}" >> ~/.abuild/abuild.conf
+        echo "JOBS=$(nproc)" >> ~/.abuild/abuild.conf
+
+        # Install RSA keys with fingerprint-based filename
+        echo "${{ inputs.rsa-private-key }}" > ~/.abuild/jambox-65ea124a.rsa
+        chmod 600 ~/.abuild/jambox-65ea124a.rsa
+
+        echo "${{ inputs.rsa-public-key }}" > ~/.abuild/jambox-65ea124a.rsa.pub
+        chmod 644 ~/.abuild/jambox-65ea124a.rsa.pub
+
+        # Validate keys using openssl
+        echo "Validating signing keys..."
+        if openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -check -noout 2>&1; then
+          echo "  ✓ Private key is valid"
+          openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -text -noout 2>&1 | grep "Private-Key:"
+        else
+          echo "  ✗ Private key is INVALID"
+          exit 1
+        fi
+
+        if openssl rsa -pubin -in ~/.abuild/jambox-65ea124a.rsa.pub -text -noout 2>&1 | grep "Public-Key:"; then
+          echo "  ✓ Public key is valid"
+        else
+          echo "  ✗ Public key is INVALID"
+          exit 1
+        fi
+
+        PRIV_MOD=$(openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -modulus -noout 2>/dev/null | md5sum)
+        PUB_MOD=$(openssl rsa -pubin -in ~/.abuild/jambox-65ea124a.rsa.pub -modulus -noout 2>/dev/null | md5sum)
+        if [ "$PRIV_MOD" = "$PUB_MOD" ]; then
+          echo "  ✓ Keys are a matching pair"
+        else
+          echo "  ✗ Keys DO NOT MATCH"
+          exit 1
+        fi
+
+        # Configure signing with fingerprint-based filename
+        echo "PACKAGER_PRIVKEY=~/.abuild/jambox-65ea124a.rsa" >> ~/.abuild/abuild.conf
+
+        echo "✓ Signing keys validated and configured"
+        ls -la ~/.abuild/
+
+    - name: Install public key to system keyring
+      shell: alpine.sh --root {0}
+      run: |
+        # Install public key for package verification
+        mkdir -p /etc/apk/keys
+        cp /home/runner/.abuild/jambox-65ea124a.rsa.pub /etc/apk/keys/
+        chmod 644 /etc/apk/keys/jambox-65ea124a.rsa.pub
+        echo "✓ Public key installed to system keyring"
+        ls -la /etc/apk/keys/jambox*
