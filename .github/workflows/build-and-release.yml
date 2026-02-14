@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'v*'  # Match v3.19, v3.20, etc. (Alpine standard)
+      - workflow-improvements  # Temporary for testing
     # Only trigger on actual package changes
     paths:
       - 'JamBox/*/APKBUILD'
@@ -136,20 +137,54 @@ jobs:
           echo "CARCH=${{ matrix.arch }}" >> ~/.abuild/abuild.conf
           echo "JOBS=$(nproc)" >> ~/.abuild/abuild.conf
 
-          # Install RSA keys
-          echo "${{ secrets.RSA_PRIVATE_KEY }}" > ~/.abuild/jambox.rsa
-          chmod 600 ~/.abuild/jambox.rsa
+          # Install RSA keys with fingerprint-based filename
+          echo "${{ secrets.RSA_PRIVATE_KEY }}" > ~/.abuild/jambox-65ea124a.rsa
+          chmod 600 ~/.abuild/jambox-65ea124a.rsa
 
-          echo "${{ secrets.RSA_PUBLIC_KEY }}" > ~/.abuild/jambox.rsa.pub
-          chmod 644 ~/.abuild/jambox.rsa.pub
+          echo "${{ secrets.RSA_PUBLIC_KEY }}" > ~/.abuild/jambox-65ea124a.rsa.pub
+          chmod 644 ~/.abuild/jambox-65ea124a.rsa.pub
 
-          # Configure signing
-          echo "PRIVATE_KEY_PATH=~/.abuild/jambox.rsa" >> ~/.abuild/abuild.conf
-          echo "PACKAGER_PRIVKEY=~/.abuild/jambox.rsa" >> ~/.abuild/abuild.conf
+          # Validate keys using openssl
+          echo "Validating signing keys..."
+          if openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -check -noout 2>&1; then
+            echo "  ✓ Private key is valid"
+            openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -text -noout 2>&1 | grep "Private-Key:"
+          else
+            echo "  ✗ Private key is INVALID"
+            exit 1
+          fi
 
-          # Verify keys are readable
-          test -f ~/.abuild/jambox.rsa || (echo "ERROR: Private key not found"; exit 1)
-          test -f ~/.abuild/jambox.rsa.pub || (echo "ERROR: Public key not found"; exit 1)
+          if openssl rsa -pubin -in ~/.abuild/jambox-65ea124a.rsa.pub -text -noout 2>&1 | grep "Public-Key:"; then
+            echo "  ✓ Public key is valid"
+          else
+            echo "  ✗ Public key is INVALID"
+            exit 1
+          fi
+
+          PRIV_MOD=$(openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -modulus -noout 2>/dev/null | md5sum)
+          PUB_MOD=$(openssl rsa -pubin -in ~/.abuild/jambox-65ea124a.rsa.pub -modulus -noout 2>/dev/null | md5sum)
+          if [ "$PRIV_MOD" = "$PUB_MOD" ]; then
+            echo "  ✓ Keys are a matching pair"
+          else
+            echo "  ✗ Keys DO NOT MATCH"
+            exit 1
+          fi
+
+          # Configure signing with fingerprint-based filename
+          echo "PACKAGER_PRIVKEY=~/.abuild/jambox-65ea124a.rsa" >> ~/.abuild/abuild.conf
+
+          echo "✓ Signing keys validated and configured"
+          ls -la ~/.abuild/
+
+      - name: Install public key to system keyring
+        shell: alpine.sh --root {0}
+        run: |
+          # Install public key for package verification
+          mkdir -p /etc/apk/keys
+          cp /home/runner/.abuild/jambox-65ea124a.rsa.pub /etc/apk/keys/
+          chmod 644 /etc/apk/keys/jambox-65ea124a.rsa.pub
+          echo "✓ Public key installed to system keyring"
+          ls -la /etc/apk/keys/jambox*
 
       - name: Build packages for ${{ matrix.arch }}
         shell: alpine.sh {0}
@@ -312,5 +347,6 @@ jobs:
     permissions:
       contents: write
       pages: write
+    secrets: inherit
     with:
       alpine-version: ${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}

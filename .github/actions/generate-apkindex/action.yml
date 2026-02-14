@@ -1,0 +1,68 @@
+name: Generate APKINDEX
+description: Generate APKINDEX files for all Alpine package architectures
+
+inputs:
+  alpine-version:
+    required: true
+    description: Alpine version (edge, v3.20, etc.)
+
+runs:
+  using: composite
+  steps:
+    - name: Generate APKINDEX files
+      shell: bash
+      run: |
+        ALPINE_VER="${{ inputs.alpine-version }}"
+
+        echo "=== Generating APKINDEX for Alpine ${ALPINE_VER} ==="
+
+        docker run --rm \
+          -v "${{ github.workspace }}/${ALPINE_VER}:/repo" \
+          -v "${{ github.workspace }}/.abuild-keys:/keys:ro" \
+          -w /repo \
+          alpine:latest sh -c '
+            apk add --no-cache abuild apk-tools
+
+            # Setup abuild with private key for signing APKINDEX
+            mkdir -p ~/.abuild /etc/apk/keys
+
+            # Install private key for signing
+            cp /keys/jambox-65ea124a.rsa ~/.abuild/
+            chmod 600 ~/.abuild/jambox-65ea124a.rsa
+
+            # Install public key to keyring
+            cp /keys/jambox-65ea124a.rsa.pub ~/.abuild/
+            cp /keys/jambox-65ea124a.rsa.pub /etc/apk/keys/
+            chmod 644 ~/.abuild/jambox-65ea124a.rsa.pub
+
+            # Configure abuild to use this key for signing
+            echo "PACKAGER_PRIVKEY=~/.abuild/jambox-65ea124a.rsa" >> ~/.abuild/abuild.conf
+
+            echo "✓ Signing keys configured"
+            echo "Installed keys:"
+            ls -la /etc/apk/keys/ || echo "  (no keys directory)"
+
+            for arch in x86_64 aarch64 armv7 armhf; do
+              if [ -d "JamBox/${arch}" ] && ls JamBox/${arch}/*.apk >/dev/null 2>&1; then
+                cd "JamBox/${arch}"
+                PKG_COUNT=$(ls -1 *.apk | wc -l)
+                echo ""
+                echo "Generating APKINDEX for ${arch} (${PKG_COUNT} packages)..."
+
+                # Generate APKINDEX - apk index will verify signatures using installed public key
+                if apk index -o APKINDEX.tar.gz *.apk; then
+                  echo "✓ APKINDEX created and signatures verified for ${arch}"
+                else
+                  RESULT=$?
+                  echo "✗ FAILED to generate APKINDEX for ${arch} (exit code: $RESULT)"
+                  exit $RESULT
+                fi
+                cd /repo
+              else
+                echo "  ✗ No packages for ${arch}"
+              fi
+            done
+
+            echo ""
+            echo "✓ All APKINDEX files generated successfully"
+          '
