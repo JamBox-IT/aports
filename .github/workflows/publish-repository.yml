@@ -44,9 +44,16 @@ jobs:
           mkdir -p .abuild-keys
 
           # Install RSA public key with fingerprint-based filename
-          # Packages expect jambox-65ea124a.rsa.pub (the fingerprint from abuild-keygen)
-          echo "${{ secrets.RSA_PUBLIC_KEY }}" > .abuild-keys/jambox-65ea124a.rsa.pub
+          # Use printf to avoid shell interpretation and preserve exact formatting
+          printf '%s\n' "${{ secrets.RSA_PUBLIC_KEY }}" > .abuild-keys/jambox-65ea124a.rsa.pub
           chmod 644 .abuild-keys/jambox-65ea124a.rsa.pub
+
+          # Debug: Check key format
+          echo "Key file details:"
+          echo "  Size: $(wc -c < .abuild-keys/jambox-65ea124a.rsa.pub) bytes"
+          echo "  Lines: $(wc -l < .abuild-keys/jambox-65ea124a.rsa.pub)"
+          echo "  First line: $(head -1 .abuild-keys/jambox-65ea124a.rsa.pub)"
+          echo "  Last line: $(tail -1 .abuild-keys/jambox-65ea124a.rsa.pub)"
 
           # Verify the key file exists and is readable
           if [ ! -f .abuild-keys/jambox-65ea124a.rsa.pub ]; then
@@ -55,8 +62,6 @@ jobs:
           fi
 
           echo "✓ Public key staged for Docker container"
-          echo "  Location: .abuild-keys/jambox-65ea124a.rsa.pub"
-          echo "  Size: $(wc -c < .abuild-keys/jambox-65ea124a.rsa.pub) bytes"
 
       - name: Download build artifacts (if called from build workflow)
         continue-on-error: true
