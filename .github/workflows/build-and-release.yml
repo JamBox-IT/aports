@@ -269,7 +269,7 @@ jobs:
           # Find and sign any unsigned packages
           find ~/packages -name "*.apk" -type f 2>/dev/null | while read -r pkg; do
             echo "Signing: $pkg"
-            abuild-sign -k ~/.abuild/jambox.rsa "$pkg" 2>/dev/null || true
+            abuild-sign -k ~/.abuild/jambox-65ea124a.rsa "$pkg" 2>/dev/null || true
           done
 
       - name: Collect built packages
