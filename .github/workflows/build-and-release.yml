@@ -249,12 +249,12 @@ jobs:
           # Save build status to file for later steps
           mkdir -p "$WORKSPACE/build-status"
           cat > "$WORKSPACE/build-status/${{ matrix.arch }}.txt" << EOF
-          ARCH=${{ matrix.arch }}
-          ALPINE_VERSION=${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}
-          SUCCESSFUL=$SUCCESSFUL_PACKAGES
-          FAILED=$FAILED_PACKAGES
-          SKIPPED=$SKIPPED_PACKAGES
-          SKIPPED_EXISTING=$SKIPPED_EXISTING
+          ARCH="${{ matrix.arch }}"
+          ALPINE_VERSION="${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}"
+          SUCCESSFUL="$SUCCESSFUL_PACKAGES"
+          FAILED="$FAILED_PACKAGES"
+          SKIPPED="$SKIPPED_PACKAGES"
+          SKIPPED_EXISTING="$SKIPPED_EXISTING"
           EOF
 
           if [ $BUILD_FAILED -ne 0 ]; then
