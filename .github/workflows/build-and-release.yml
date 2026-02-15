@@ -175,6 +175,7 @@ jobs:
 
           # Find the actual repository path
           REPO_PATH="${GITHUB_WORKSPACE:-/home/runner/work/aports/aports}"
+          WORKSPACE="${GITHUB_WORKSPACE:-/home/runner/work/aports/aports}"
           cd "$REPO_PATH" || exit 1
           echo "Repository path: $REPO_PATH"
           echo "Current directory: $(pwd)"
