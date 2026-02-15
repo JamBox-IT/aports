@@ -232,10 +232,9 @@ jobs:
           echo ""
           echo "Add to /etc/apk/repositories:"
           echo ""
-          for arch in x86_64 aarch64 armv7 armhf; do
-            echo "  # ${arch}"
-            echo "  @jambox https://jambox-it.github.io/aports/${BRANCH}/JamBox/${arch}"
-            echo ""
-          done
+          echo "  @jambox https://jambox-it.github.io/aports/${BRANCH}/JamBox"
+          echo ""
           echo "Install packages with:"
           echo "  apk add package-name@jambox"
+          echo ""
+          echo "Note: apk automatically appends your architecture (x86_64, aarch64, armv7, armhf)"
