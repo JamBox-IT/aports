@@ -50,9 +50,9 @@ runs:
       run: |
         ALPINE_VERSION="${{ inputs.alpine-version }}"
 
-        # Install JamBox public key
-        echo "${{ inputs.rsa-public-key }}" > /etc/apk/keys/jambox.rsa.pub
-        chmod 644 /etc/apk/keys/jambox.rsa.pub
+        # Install JamBox public key (fingerprint-based filename)
+        echo "${{ inputs.rsa-public-key }}" > /etc/apk/keys/jambox-65ea124a.rsa.pub
+        chmod 644 /etc/apk/keys/jambox-65ea124a.rsa.pub
 
         # Configure /etc/apk/repositories
         cat > /etc/apk/repositories << EOF
