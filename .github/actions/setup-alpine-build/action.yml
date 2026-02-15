@@ -63,7 +63,7 @@ runs:
         # Alpine testing repository (needed for packages in testing/)
         ${{ inputs.mirror-url }}/${ALPINE_VERSION}/testing
         # JamBox custom repository (may not exist on first build)
-        @jambox https://jambox-it.github.io/aports/${ALPINE_VERSION}/JamBox/${{ inputs.arch }}
+        @jambox https://jambox-it.github.io/aports/${ALPINE_VERSION}/JamBox
         EOF
 
         cat /etc/apk/repositories
