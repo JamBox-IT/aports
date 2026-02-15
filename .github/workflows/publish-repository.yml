@@ -181,15 +181,46 @@ jobs:
           done
 
       - name: Publish to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./${{ inputs.alpine-version }}
-          publish_branch: gh-pages
-          keep_files: true
-          destination_dir: ${{ inputs.alpine-version }}
-          enable_jekyll: false
-          cname: false
+        run: |
+          ALPINE_VERSION="${{ inputs.alpine-version }}"
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Save the newly built repository to a temp location
+          mkdir -p /tmp/new-repo
+          cp -r "${ALPINE_VERSION}" /tmp/new-repo/
+
+          # Fetch and checkout gh-pages branch
+          git fetch origin gh-pages:gh-pages 2>/dev/null || git checkout --orphan gh-pages
+          git checkout gh-pages
+
+          # Ensure destination exists
+          mkdir -p "${ALPINE_VERSION}"
+
+          # Copy new packages over existing ones
+          # - Same package-version: overwrites (updates)
+          # - Different versions: both kept (preserves pins)
+          cp -r /tmp/new-repo/"${ALPINE_VERSION}"/* "${ALPINE_VERSION}/"
+
+          # Disable Jekyll
+          touch .nojekyll
+
+          # Add all changes
+          git add "${ALPINE_VERSION}" .nojekyll
+
+          # Commit changes
+          git commit -m "Update Alpine ${ALPINE_VERSION} repository
+
+          Packages updated by build #${{ github.run_number }}
+
+          - New packages added
+          - Existing packages kept (no deletions)
+          - APKINDEX rebuilt" || echo "No changes to commit"
+
+          # Push to gh-pages
+          git push origin gh-pages
 
       - name: Generate repository URL
         run: |
