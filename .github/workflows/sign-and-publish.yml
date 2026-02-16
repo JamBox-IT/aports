@@ -235,6 +235,76 @@ jobs:
 
               echo "PACKAGER_PRIVKEY=~/.abuild/jambox-65ea124a.rsa" >> ~/.abuild/abuild.conf
 
+              # Diagnostic functions
+              diagnose_signing_key() {
+                echo ""
+                echo "=== SIGNING KEY DIAGNOSTICS ==="
+                echo "Key file: ~/.abuild/jambox-65ea124a.rsa"
+                echo ""
+                echo "Key structure:"
+                openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -text -noout 2>&1 | head -20
+                echo ""
+                echo "Key modulus hash:"
+                openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -modulus -noout 2>&1 | openssl md5
+                echo ""
+                echo "Public key from private key:"
+                openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -pubout 2>&1 | head -5
+                echo ""
+              }
+
+              diagnose_package_signature() {
+                local pkg="$1"
+                echo ""
+                echo "=== PACKAGE SIGNATURE DIAGNOSTICS: $pkg ==="
+
+                # List signature files in package
+                echo "Signature files in package:"
+                tar -tzf "$pkg" 2>/dev/null | grep -E "^\\.SIGN\\." || echo "  (none found)"
+                echo ""
+
+                # Extract and examine signature file if it exists
+                local sigfile=$(tar -tzf "$pkg" 2>/dev/null | grep -E "^\\.SIGN\\.RSA\\." | head -1)
+                if [ -n "$sigfile" ]; then
+                  echo "Found signature: $sigfile"
+
+                  # Extract signature file
+                  mkdir -p /tmp/sig-debug
+                  tar -xzf "$pkg" -C /tmp/sig-debug "$sigfile" 2>/dev/null || echo "  Failed to extract signature"
+
+                  if [ -f "/tmp/sig-debug/$sigfile" ]; then
+                    echo "Signature file size: $(stat -c %s /tmp/sig-debug/$sigfile 2>/dev/null || stat -f %z /tmp/sig-debug/$sigfile) bytes"
+                    echo ""
+                    echo "Signature file header (hex):"
+                    head -c 100 "/tmp/sig-debug/$sigfile" | od -A x -t x1z -v | head -10
+                    echo ""
+
+                    # Try to extract public key from signature
+                    echo "Attempting to decode signature structure..."
+                    openssl asn1parse -inform DER -in "/tmp/sig-debug/$sigfile" 2>&1 | head -20 || echo "  (not ASN.1 DER format)"
+                    echo ""
+                  fi
+
+                  rm -rf /tmp/sig-debug
+
+                  # Check expected vs actual key name
+                  local expected_key=$(echo "$sigfile" | sed "s/\\.SIGN\\.RSA\\.//")
+                  local actual_key="jambox-65ea124a.rsa.pub"
+                  echo "Expected key name: $expected_key"
+                  echo "Actual key name: $actual_key"
+                  if [ "$expected_key" != "$actual_key" ]; then
+                    echo "⚠ KEY NAME MISMATCH DETECTED"
+                  fi
+                else
+                  echo "No signature file found in package"
+                fi
+                echo ""
+
+                # Check package metadata
+                echo "Package control data:"
+                tar -xzf "$pkg" -O .PKGINFO 2>/dev/null | head -20 || echo "  (failed to extract .PKGINFO)"
+                echo ""
+              }
+
               TOTAL_PACKAGES=0
               VALID_SIGS=0
               INVALID_SIGS=0
@@ -276,25 +346,33 @@ jobs:
                     if [ $SIG_STATUS -eq 1 ]; then
                       echo "  ✗ ${pkg}: INVALID signature - re-signing"
                       INVALID_SIGS=$((INVALID_SIGS + 1))
+                      # Diagnose invalid signature
+                      diagnose_package_signature "$pkg"
                     else
                       echo "  ⚠ ${pkg}: Unsigned - signing"
                       UNSIGNED=$((UNSIGNED + 1))
                     fi
 
                     # Sign package
-                    if abuild-sign -k ~/.abuild/jambox-65ea124a.rsa "$pkg"; then
+                    SIGN_OUTPUT=$(abuild-sign -k ~/.abuild/jambox-65ea124a.rsa "$pkg" 2>&1)
+                    SIGN_RESULT=$?
+
+                    if [ $SIGN_RESULT -eq 0 ]; then
                       echo "    ✓ Signed successfully"
                       RESIGNED=$((RESIGNED + 1))
 
-                      # Verify signature
-                      if abuild-sign -v -k ~/.abuild/jambox-65ea124a.rsa "$pkg" 2>/dev/null; then
-                        echo "    ✓ Signature verified"
-                      else
-                        echo "    ✗ FAILED to verify signature after signing"
+                      # Verify the signature was actually created
+                      if ! abuild-sign -v -k ~/.abuild/jambox-65ea124a.rsa "$pkg" 2>/dev/null; then
+                        echo "    ✗ WARNING: Signing reported success but verification failed"
+                        diagnose_signing_key
+                        diagnose_package_signature "$pkg"
                         exit 1
                       fi
                     else
                       echo "    ✗ FAILED to sign package"
+                      echo "    Signing output: $SIGN_OUTPUT"
+                      diagnose_signing_key
+                      diagnose_package_signature "$pkg"
                       exit 1
                     fi
                   fi
@@ -335,6 +413,78 @@ jobs:
 
               mkdir -p ~/.abuild /etc/apk/keys
 
+              # Diagnostic functions
+              diagnose_signing_key() {
+                local keyfile="$1"
+                local keyname="$2"
+                echo ""
+                echo "=== SIGNING KEY DIAGNOSTICS ==="
+                echo "Key file: $keyfile"
+                echo "Key name: $keyname"
+                echo ""
+                echo "Key structure:"
+                openssl rsa -in "$keyfile" -text -noout 2>&1 | head -20
+                echo ""
+                echo "Key modulus hash:"
+                openssl rsa -in "$keyfile" -modulus -noout 2>&1 | openssl md5
+                echo ""
+                echo "Public key from private key:"
+                openssl rsa -in "$keyfile" -pubout 2>&1 | head -5
+                echo ""
+              }
+
+              diagnose_package_signature() {
+                local pkg="$1"
+                echo ""
+                echo "=== PACKAGE SIGNATURE DIAGNOSTICS: $pkg ==="
+
+                # List signature files in package
+                echo "Signature files in package:"
+                tar -tzf "$pkg" 2>/dev/null | grep -E "^\\.SIGN\\." || echo "  (none found)"
+                echo ""
+
+                # Extract and examine signature file if it exists
+                local sigfile=$(tar -tzf "$pkg" 2>/dev/null | grep -E "^\\.SIGN\\.RSA\\." | head -1)
+                if [ -n "$sigfile" ]; then
+                  echo "Found signature: $sigfile"
+
+                  # Extract signature file
+                  mkdir -p /tmp/sig-debug
+                  tar -xzf "$pkg" -C /tmp/sig-debug "$sigfile" 2>/dev/null || echo "  Failed to extract signature"
+
+                  if [ -f "/tmp/sig-debug/$sigfile" ]; then
+                    echo "Signature file size: $(stat -c %s /tmp/sig-debug/$sigfile 2>/dev/null || stat -f %z /tmp/sig-debug/$sigfile) bytes"
+                    echo ""
+                    echo "Signature file header (hex):"
+                    head -c 100 "/tmp/sig-debug/$sigfile" | od -A x -t x1z -v | head -10
+                    echo ""
+
+                    # Try to extract public key from signature
+                    echo "Attempting to decode signature structure..."
+                    openssl asn1parse -inform DER -in "/tmp/sig-debug/$sigfile" 2>&1 | head -20 || echo "  (not ASN.1 DER format)"
+                    echo ""
+                  fi
+
+                  rm -rf /tmp/sig-debug
+
+                  # Check expected vs actual key name
+                  local expected_key=$(echo "$sigfile" | sed "s/\\.SIGN\\.RSA\\.//")
+                  echo "Expected key name: $expected_key"
+                  echo "Configured key: jambox-${NEW_FINGERPRINT}.rsa.pub"
+                  if [ "$expected_key" != "jambox-${NEW_FINGERPRINT}.rsa.pub" ]; then
+                    echo "⚠ KEY NAME MISMATCH DETECTED"
+                  fi
+                else
+                  echo "No signature file found in package"
+                fi
+                echo ""
+
+                # Check package metadata
+                echo "Package control data:"
+                tar -xzf "$pkg" -O .PKGINFO 2>/dev/null | head -20 || echo "  (failed to extract .PKGINFO)"
+                echo ""
+              }
+
               # Get fingerprint from new public key
               NEW_FINGERPRINT=$(openssl rsa -pubin -in /new-keys/new-public.rsa.pub -text -noout 2>/dev/null | grep -A1 "Public-Key:" | tail -1 | tr -d " \n:" | tail -c 9)
               echo "New key fingerprint: ${NEW_FINGERPRINT}"
@@ -370,10 +520,24 @@ jobs:
                 echo "Re-signing ${PKG_COUNT} packages for ${arch} with new key..."
 
                 for pkg in *.apk; do
-                  if abuild-sign -k ~/.abuild/jambox-${NEW_FINGERPRINT}.rsa "$pkg"; then
+                  SIGN_OUTPUT=$(abuild-sign -k ~/.abuild/jambox-${NEW_FINGERPRINT}.rsa "$pkg" 2>&1)
+                  SIGN_RESULT=$?
+
+                  if [ $SIGN_RESULT -eq 0 ]; then
                     TOTAL_RESIGNED=$((TOTAL_RESIGNED + 1))
+
+                    # Verify the signature was actually created
+                    if ! abuild-sign -v -k ~/.abuild/jambox-${NEW_FINGERPRINT}.rsa "$pkg" 2>/dev/null; then
+                      echo "✗ WARNING: Signing ${pkg} reported success but verification failed"
+                      diagnose_signing_key ~/.abuild/jambox-${NEW_FINGERPRINT}.rsa "jambox-${NEW_FINGERPRINT}"
+                      diagnose_package_signature "$pkg"
+                      exit 1
+                    fi
                   else
                     echo "✗ FAILED to re-sign ${pkg}"
+                    echo "Signing output: $SIGN_OUTPUT"
+                    diagnose_signing_key ~/.abuild/jambox-${NEW_FINGERPRINT}.rsa "jambox-${NEW_FINGERPRINT}"
+                    diagnose_package_signature "$pkg"
                     exit 1
                   fi
                 done
@@ -407,7 +571,7 @@ jobs:
             -w /repo \
             alpine:latest sh -c '
               set -e
-              apk add --no-cache abuild apk-tools
+              apk add --no-cache abuild apk-tools openssl
 
               mkdir -p ~/.abuild /etc/apk/keys
 
@@ -422,6 +586,60 @@ jobs:
 
               echo "✓ Signing keys configured"
 
+              # Diagnostic function
+              diagnose_signing_key() {
+                echo ""
+                echo "=== SIGNING KEY DIAGNOSTICS ==="
+                echo "Key file: ~/.abuild/jambox-65ea124a.rsa"
+                echo ""
+                echo "Key structure:"
+                openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -text -noout 2>&1 | head -20
+                echo ""
+                echo "Key modulus hash:"
+                openssl rsa -in ~/.abuild/jambox-65ea124a.rsa -modulus -noout 2>&1 | openssl md5
+                echo ""
+              }
+
+              diagnose_apkindex_signature() {
+                local idxfile="$1"
+                echo ""
+                echo "=== APKINDEX SIGNATURE DIAGNOSTICS: $idxfile ==="
+
+                # List contents
+                echo "APKINDEX archive contents:"
+                tar -tzf "$idxfile" 2>/dev/null || echo "  (failed to list)"
+                echo ""
+
+                # Check for signature
+                local sigfile=$(tar -tzf "$idxfile" 2>/dev/null | grep -E "^\\.SIGN\\." | head -1)
+                if [ -n "$sigfile" ]; then
+                  echo "Found signature: $sigfile"
+
+                  # Extract and examine
+                  mkdir -p /tmp/idx-debug
+                  tar -xzf "$idxfile" -C /tmp/idx-debug "$sigfile" 2>/dev/null || echo "  Failed to extract signature"
+
+                  if [ -f "/tmp/idx-debug/$sigfile" ]; then
+                    echo "Signature file size: $(stat -c %s /tmp/idx-debug/$sigfile 2>/dev/null || stat -f %z /tmp/idx-debug/$sigfile) bytes"
+                    echo ""
+
+                    # Check expected vs actual key name
+                    local expected_key=$(echo "$sigfile" | sed "s/\\.SIGN\\.RSA\\.//")
+                    local actual_key="jambox-65ea124a.rsa.pub"
+                    echo "Expected key name: $expected_key"
+                    echo "Actual key name: $actual_key"
+                    if [ "$expected_key" != "$actual_key" ]; then
+                      echo "⚠ KEY NAME MISMATCH DETECTED"
+                    fi
+                  fi
+
+                  rm -rf /tmp/idx-debug
+                else
+                  echo "No signature file found in APKINDEX"
+                fi
+                echo ""
+              }
+
               for arch in x86_64 aarch64 armv7 armhf; do
                 if [ -d "JamBox/${arch}" ] && ls JamBox/${arch}/*.apk >/dev/null 2>&1; then
                   cd "JamBox/${arch}"
@@ -433,18 +651,36 @@ jobs:
                   rm -f APKINDEX.tar.gz APKINDEX DESCRIPTION
 
                   # Generate new APKINDEX
-                  if apk index -o APKINDEX.tar.gz *.apk; then
+                  INDEX_OUTPUT=$(apk index -o APKINDEX.tar.gz *.apk 2>&1)
+                  INDEX_RESULT=$?
+
+                  if [ $INDEX_RESULT -eq 0 ]; then
                     echo "  ✓ APKINDEX created"
                   else
                     echo "  ✗ FAILED to generate APKINDEX"
+                    echo "  Output: $INDEX_OUTPUT"
                     exit 1
                   fi
 
                   # Sign APKINDEX
-                  if abuild-sign -k ~/.abuild/jambox-65ea124a.rsa APKINDEX.tar.gz; then
+                  SIGN_OUTPUT=$(abuild-sign -k ~/.abuild/jambox-65ea124a.rsa APKINDEX.tar.gz 2>&1)
+                  SIGN_RESULT=$?
+
+                  if [ $SIGN_RESULT -eq 0 ]; then
                     echo "  ✓ APKINDEX signed"
+
+                    # Verify the signature was actually created
+                    if ! abuild-sign -v -k ~/.abuild/jambox-65ea124a.rsa APKINDEX.tar.gz 2>/dev/null; then
+                      echo "  ✗ WARNING: Signing APKINDEX reported success but verification failed"
+                      diagnose_signing_key
+                      diagnose_apkindex_signature APKINDEX.tar.gz
+                      exit 1
+                    fi
                   else
                     echo "  ✗ FAILED to sign APKINDEX"
+                    echo "  Signing output: $SIGN_OUTPUT"
+                    diagnose_signing_key
+                    diagnose_apkindex_signature APKINDEX.tar.gz
                     exit 1
                   fi
 
