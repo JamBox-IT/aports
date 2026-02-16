@@ -310,6 +310,7 @@ jobs:
               INVALID_SIGS=0
               UNSIGNED=0
               RESIGNED=0
+              VERIFICATION_FAILED=0
 
               for arch in x86_64 aarch64 armv7 armhf; do
                 if [ ! -d "JamBox/${arch}" ]; then
@@ -330,42 +331,50 @@ jobs:
                 TOTAL_PACKAGES=$((TOTAL_PACKAGES + PKG_COUNT))
 
                 for pkg in *.apk; do
-                  # Check signature status
-                  if abuild-sign -v -k ~/.abuild/jambox-65ea124a.rsa "$pkg" 2>/dev/null; then
-                    echo "  ✓ ${pkg}: Valid signature"
-                    VALID_SIGS=$((VALID_SIGS + 1))
+                  NEEDS_SIGNING=false
 
-                    # Re-sign if key rotation or force-resign
-                    if [ "'"${ROTATION_NEEDED}"'" = "true" ] || [ "'"${FORCE_RESIGN}"'" = "true" ]; then
-                      echo "    → Re-signing ${pkg}"
-                      abuild-sign -k ~/.abuild/jambox-65ea124a.rsa "$pkg"
-                      RESIGNED=$((RESIGNED + 1))
+                  # Check if package has a signature
+                  if tar -tzf "$pkg" 2>/dev/null | grep -q "^\\.SIGN\\.RSA\\."; then
+                    # Package is signed - verify it
+                    if apk verify -k /etc/apk/keys "$pkg" 2>/dev/null; then
+                      echo "  ✓ ${pkg}: Valid signature (verified with apk verify)"
+                      VALID_SIGS=$((VALID_SIGS + 1))
+
+                      # Re-sign if key rotation or force-resign
+                      if [ "'"${ROTATION_NEEDED}"'" = "true" ] || [ "'"${FORCE_RESIGN}"'" = "true" ]; then
+                        echo "    → Re-signing ${pkg} (rotation/force-resign requested)"
+                        NEEDS_SIGNING=true
+                      fi
+                    else
+                      echo "  ✗ ${pkg}: INVALID signature - verification failed"
+                      INVALID_SIGS=$((INVALID_SIGS + 1))
+                      diagnose_package_signature "$pkg"
+                      NEEDS_SIGNING=true
                     fi
                   else
-                    SIG_STATUS=$?
-                    if [ $SIG_STATUS -eq 1 ]; then
-                      echo "  ✗ ${pkg}: INVALID signature - re-signing"
-                      INVALID_SIGS=$((INVALID_SIGS + 1))
-                      # Diagnose invalid signature
-                      diagnose_package_signature "$pkg"
-                    else
-                      echo "  ⚠ ${pkg}: Unsigned - signing"
-                      UNSIGNED=$((UNSIGNED + 1))
-                    fi
+                    echo "  ⚠ ${pkg}: Unsigned - signing"
+                    UNSIGNED=$((UNSIGNED + 1))
+                    NEEDS_SIGNING=true
+                  fi
 
-                    # Sign package
+                  # Sign or re-sign if needed
+                  if [ "$NEEDS_SIGNING" = "true" ]; then
                     SIGN_OUTPUT=$(abuild-sign -k ~/.abuild/jambox-65ea124a.rsa "$pkg" 2>&1)
                     SIGN_RESULT=$?
 
                     if [ $SIGN_RESULT -eq 0 ]; then
-                      echo "    ✓ Signed successfully"
-                      RESIGNED=$((RESIGNED + 1))
+                      echo "    ✓ Package signed successfully"
 
-                      # Verify the signature was actually created
-                      if ! abuild-sign -v -k ~/.abuild/jambox-65ea124a.rsa "$pkg" 2>/dev/null; then
-                        echo "    ✗ WARNING: Signing reported success but verification failed"
+                      # MANDATORY: Verify the signature actually works
+                      if apk verify -k /etc/apk/keys "$pkg" 2>/dev/null; then
+                        echo "    ✓ Signature verified with apk verify"
+                        RESIGNED=$((RESIGNED + 1))
+                      else
+                        echo "    ✗ CRITICAL: Signing reported success but verification FAILED"
+                        echo "    This package will NOT work for end users!"
                         diagnose_signing_key
                         diagnose_package_signature "$pkg"
+                        VERIFICATION_FAILED=$((VERIFICATION_FAILED + 1))
                         exit 1
                       fi
                     else
@@ -388,11 +397,19 @@ jobs:
               echo "Invalid signatures (fixed): ${INVALID_SIGS}"
               echo "Unsigned (fixed): ${UNSIGNED}"
               echo "Re-signed: ${RESIGNED}"
+              echo "Verification failures: ${VERIFICATION_FAILED}"
+
+              if [ $VERIFICATION_FAILED -gt 0 ]; then
+                echo ""
+                echo "✗ CRITICAL: ${VERIFICATION_FAILED} package(s) failed verification"
+                echo "These packages will NOT work for end users and were NOT published"
+                exit 1
+              fi
 
               if [ $TOTAL_PACKAGES -eq 0 ]; then
                 echo "⚠ WARNING: No packages found"
               else
-                echo "✓ All packages validated and signed"
+                echo "✓ All packages validated and signed with verified signatures"
               fi
             '
 
@@ -525,14 +542,6 @@ jobs:
 
                   if [ $SIGN_RESULT -eq 0 ]; then
                     TOTAL_RESIGNED=$((TOTAL_RESIGNED + 1))
-
-                    # Verify the signature was actually created
-                    if ! abuild-sign -v -k ~/.abuild/jambox-${NEW_FINGERPRINT}.rsa "$pkg" 2>/dev/null; then
-                      echo "✗ WARNING: Signing ${pkg} reported success but verification failed"
-                      diagnose_signing_key ~/.abuild/jambox-${NEW_FINGERPRINT}.rsa "jambox-${NEW_FINGERPRINT}"
-                      diagnose_package_signature "$pkg"
-                      exit 1
-                    fi
                   else
                     echo "✗ FAILED to re-sign ${pkg}"
                     echo "Signing output: $SIGN_OUTPUT"
@@ -558,6 +567,83 @@ jobs:
           echo "  3. Delete NEW_RSA_PRIVATE_KEY secret"
           echo "  4. Delete NEW_RSA_PUBLIC_KEY secret"
           echo ""
+
+      - name: End-user simulation test
+        run: |
+          ALPINE_VER="${{ inputs.alpine-version }}"
+
+          echo "=== End-User Package Verification Test for Alpine ${ALPINE_VER} ==="
+          echo "Simulating what end users will experience when installing packages"
+          echo ""
+
+          docker run --rm \
+            -v "$PWD/${ALPINE_VER}:/repo:ro" \
+            -v "$PWD/.abuild-keys:/keys:ro" \
+            -w /repo \
+            alpine:latest sh -c '
+              set -e
+              apk add --no-cache apk-tools
+
+              # Install public key to /etc/apk/keys (where apk looks for keys)
+              mkdir -p /etc/apk/keys
+              cp /keys/jambox-65ea124a.rsa.pub /etc/apk/keys/
+
+              echo "Public key installed to /etc/apk/keys/"
+              echo ""
+
+              TOTAL_TESTED=0
+              VERIFICATION_PASSED=0
+              VERIFICATION_FAILED=0
+
+              for arch in x86_64 aarch64 armv7 armhf; do
+                if [ ! -d "JamBox/${arch}" ]; then
+                  continue
+                fi
+
+                PKG_COUNT=$(ls -1 JamBox/${arch}/*.apk 2>/dev/null | wc -l)
+                if [ $PKG_COUNT -eq 0 ]; then
+                  continue
+                fi
+
+                echo "Testing ${arch} packages (${PKG_COUNT} total)..."
+
+                for pkg in JamBox/${arch}/*.apk; do
+                  TOTAL_TESTED=$((TOTAL_TESTED + 1))
+                  pkg_name=$(basename "$pkg")
+
+                  # Test 1: apk verify (checks signature validity)
+                  if apk verify -k /etc/apk/keys "$pkg" 2>/dev/null; then
+                    echo "  ✓ ${pkg_name}: Signature valid"
+                    VERIFICATION_PASSED=$((VERIFICATION_PASSED + 1))
+                  else
+                    echo "  ✗ ${pkg_name}: Signature verification FAILED"
+                    echo "    End users will get signature errors!"
+                    VERIFICATION_FAILED=$((VERIFICATION_FAILED + 1))
+                  fi
+                done
+
+                echo ""
+              done
+
+              echo "=== End-User Verification Summary ==="
+              echo "Total packages tested: ${TOTAL_TESTED}"
+              echo "Verification passed: ${VERIFICATION_PASSED}"
+              echo "Verification failed: ${VERIFICATION_FAILED}"
+              echo ""
+
+              if [ $VERIFICATION_FAILED -gt 0 ]; then
+                echo "✗ CRITICAL: ${VERIFICATION_FAILED} package(s) will fail for end users"
+                echo "DO NOT PUBLISH these packages - they have invalid signatures"
+                exit 1
+              fi
+
+              if [ $TOTAL_TESTED -eq 0 ]; then
+                echo "⚠ WARNING: No packages tested"
+              else
+                echo "✓ All packages passed end-user verification"
+                echo "These packages are safe to publish"
+              fi
+            '
 
       - name: Generate APKINDEX files
         run: |
@@ -669,9 +755,12 @@ jobs:
                   if [ $SIGN_RESULT -eq 0 ]; then
                     echo "  ✓ APKINDEX signed"
 
-                    # Verify the signature was actually created
-                    if ! abuild-sign -v -k ~/.abuild/jambox-65ea124a.rsa APKINDEX.tar.gz 2>/dev/null; then
-                      echo "  ✗ WARNING: Signing APKINDEX reported success but verification failed"
+                    # MANDATORY: Verify the APKINDEX signature works
+                    if apk verify -k /etc/apk/keys APKINDEX.tar.gz 2>/dev/null; then
+                      echo "  ✓ APKINDEX signature verified with apk verify"
+                    else
+                      echo "  ✗ CRITICAL: APKINDEX signing succeeded but verification FAILED"
+                      echo "  End users will NOT be able to use this repository!"
                       diagnose_signing_key
                       diagnose_apkindex_signature APKINDEX.tar.gz
                       exit 1
