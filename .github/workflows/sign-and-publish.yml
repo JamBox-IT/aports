@@ -219,6 +219,7 @@ jobs:
             -v "$PWD/${ALPINE_VER}:/repo" \
             -v "$PWD/.abuild-keys:/keys:ro" \
             -v "$PWD/.abuild-keys/rotation:/new-keys:ro" \
+            -w /repo \
             alpine:latest sh -c '
               set -e
               apk add --no-cache abuild apk-tools openssl
@@ -327,6 +328,7 @@ jobs:
           docker run --rm \
             -v "$PWD/${ALPINE_VER}:/repo" \
             -v "$PWD/.abuild-keys/rotation:/new-keys:ro" \
+            -w /repo \
             alpine:latest sh -c '
               set -e
               apk add --no-cache abuild apk-tools openssl
