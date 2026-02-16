@@ -1,0 +1,576 @@
+name: Sign and Publish Alpine Repository
+
+on:
+  workflow_call:
+    inputs:
+      alpine-version:
+        description: 'Alpine version (edge, v3.19, v3.20, etc.)'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      alpine-version:
+        description: 'Alpine version to rebuild'
+        required: true
+        type: choice
+        options:
+          - edge
+          - v3.21
+          - v3.20
+          - v3.19
+          - v3.18
+      force-resign:
+        description: 'Force re-sign all packages in repository'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pages: write
+
+jobs:
+  sign-and-publish:
+    name: Sign and Publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git configuration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Check for key rotation
+        id: key-rotation
+        run: |
+          if [ -n "${{ secrets.NEW_RSA_PRIVATE_KEY }}" ] && [ -n "${{ secrets.NEW_RSA_PUBLIC_KEY }}" ]; then
+            echo "rotation-needed=true" >> $GITHUB_OUTPUT
+            echo "Key rotation requested"
+          else
+            echo "rotation-needed=false" >> $GITHUB_OUTPUT
+            echo "No key rotation needed"
+          fi
+
+      - name: Validate key rotation pair
+        if: steps.key-rotation.outputs.rotation-needed == 'true'
+        run: |
+          mkdir -p .abuild-keys/rotation
+
+          echo "${{ secrets.NEW_RSA_PRIVATE_KEY }}" > .abuild-keys/rotation/new-private.rsa
+          echo "${{ secrets.NEW_RSA_PUBLIC_KEY }}" > .abuild-keys/rotation/new-public.rsa.pub
+          chmod 600 .abuild-keys/rotation/new-private.rsa
+          chmod 644 .abuild-keys/rotation/new-public.rsa.pub
+
+          echo "Validating new private key..."
+          if openssl rsa -in .abuild-keys/rotation/new-private.rsa -check -noout 2>&1; then
+            echo "  ✓ New private key is valid"
+            openssl rsa -in .abuild-keys/rotation/new-private.rsa -text -noout 2>&1 | grep "Private-Key:"
+          else
+            echo "  ✗ New private key is INVALID"
+            exit 1
+          fi
+
+          echo "Validating new public key..."
+          if openssl rsa -pubin -in .abuild-keys/rotation/new-public.rsa.pub -text -noout 2>&1 | grep "Public-Key:"; then
+            echo "  ✓ New public key is valid"
+          else
+            echo "  ✗ New public key is INVALID"
+            exit 1
+          fi
+
+          echo "Verifying new key pair match..."
+          PRIV_MOD=$(openssl rsa -in .abuild-keys/rotation/new-private.rsa -modulus -noout 2>/dev/null | md5sum)
+          PUB_MOD=$(openssl rsa -pubin -in .abuild-keys/rotation/new-public.rsa.pub -modulus -noout 2>/dev/null | md5sum)
+          if [ "$PRIV_MOD" = "$PUB_MOD" ]; then
+            echo "  ✓ New key pair is valid"
+          else
+            echo "  ✗ New key pair DOES NOT MATCH"
+            exit 1
+          fi
+
+          echo "✓ Key rotation validation complete"
+
+      - name: Setup current signing keys
+        run: |
+          mkdir -p .abuild-keys
+
+          echo "${{ secrets.RSA_PRIVATE_KEY }}" > .abuild-keys/jambox-65ea124a.rsa
+          chmod 600 .abuild-keys/jambox-65ea124a.rsa
+
+          echo "${{ secrets.RSA_PUBLIC_KEY }}" > .abuild-keys/jambox-65ea124a.rsa.pub
+          chmod 644 .abuild-keys/jambox-65ea124a.rsa.pub
+
+          echo "Validating current private key..."
+          if openssl rsa -in .abuild-keys/jambox-65ea124a.rsa -check -noout 2>&1; then
+            echo "  ✓ Private key is valid"
+            openssl rsa -in .abuild-keys/jambox-65ea124a.rsa -text -noout 2>&1 | grep "Private-Key:"
+          else
+            echo "  ✗ Private key is INVALID"
+            exit 1
+          fi
+
+          echo "Validating current public key..."
+          if openssl rsa -pubin -in .abuild-keys/jambox-65ea124a.rsa.pub -text -noout 2>&1 | grep "Public-Key:"; then
+            echo "  ✓ Public key is valid"
+          else
+            echo "  ✗ Public key is INVALID"
+            exit 1
+          fi
+
+          echo "Verifying current key pair match..."
+          PRIV_MOD=$(openssl rsa -in .abuild-keys/jambox-65ea124a.rsa -modulus -noout 2>/dev/null | md5sum)
+          PUB_MOD=$(openssl rsa -pubin -in .abuild-keys/jambox-65ea124a.rsa.pub -modulus -noout 2>/dev/null | md5sum)
+          if [ "$PRIV_MOD" = "$PUB_MOD" ]; then
+            echo "  ✓ Key pair is valid"
+          else
+            echo "  ✗ Key pair DOES NOT MATCH"
+            exit 1
+          fi
+
+          echo "✓ Current signing keys validated"
+
+      - name: Download build artifacts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          path: new-packages
+
+      - name: Organize new packages by architecture
+        run: |
+          mkdir -p packages
+          if [ -d "new-packages" ]; then
+            echo "Found build artifacts - organizing packages..."
+            for arch_dir in new-packages/packages-*/; do
+              if [ -d "$arch_dir" ]; then
+                arch=$(basename "$arch_dir" | sed 's/packages-//')
+                mkdir -p "packages/${arch}"
+                cp "$arch_dir"*.apk "packages/${arch}/" 2>/dev/null || true
+              fi
+            done
+            ls -la packages/*/ 2>/dev/null || echo "No packages organized"
+          else
+            echo "No build artifacts found (normal for manual workflow_dispatch)"
+          fi
+
+      - name: Sync existing repository from gh-pages
+        run: |
+          BRANCH="${{ inputs.alpine-version }}"
+          mkdir -p "${BRANCH}/JamBox"
+
+          echo "Fetching existing repository from gh-pages for ${BRANCH}..."
+
+          git fetch origin gh-pages --depth=1 2>/dev/null || {
+            echo "No gh-pages branch found (normal for first run)"
+            exit 0
+          }
+
+          git checkout origin/gh-pages -- "${BRANCH}/" 2>/dev/null || {
+            echo "No existing repository for ${BRANCH} (normal for first run)"
+            exit 0
+          }
+
+          echo ""
+          echo "Existing packages:"
+          for arch in x86_64 aarch64 armv7 armhf; do
+            if [ -d "${BRANCH}/JamBox/${arch}" ]; then
+              COUNT=$(find "${BRANCH}/JamBox/${arch}" -name "*.apk" 2>/dev/null | wc -l)
+              echo "  ${arch}: ${COUNT} packages"
+            else
+              echo "  ${arch}: 0 packages"
+            fi
+          done
+
+      - name: Merge new packages with existing repository
+        run: |
+          BRANCH="${{ inputs.alpine-version }}"
+          echo "=== Merging new packages with existing repository ==="
+
+          for arch in x86_64 aarch64 armv7 armhf; do
+            mkdir -p "${BRANCH}/JamBox/${arch}"
+
+            BEFORE=$(find "${BRANCH}/JamBox/${arch}" -name "*.apk" 2>/dev/null | wc -l)
+
+            if [ -d "packages/${arch}" ] && ls packages/${arch}/*.apk 2>/dev/null | head -1 >/dev/null; then
+              echo "Adding new packages for ${arch}..."
+              cp packages/${arch}/*.apk "${BRANCH}/JamBox/${arch}/"
+              AFTER=$(find "${BRANCH}/JamBox/${arch}" -name "*.apk" 2>/dev/null | wc -l)
+              NEW=$((AFTER - BEFORE))
+              echo "  Added/updated ${NEW} packages (${BEFORE} → ${AFTER} total)"
+            else
+              echo "No new packages for ${arch} (${BEFORE} existing)"
+            fi
+          done
+
+      - name: Validate and sign packages
+        run: |
+          ALPINE_VER="${{ inputs.alpine-version }}"
+          ROTATION_NEEDED="${{ steps.key-rotation.outputs.rotation-needed }}"
+          FORCE_RESIGN="${{ inputs.force-resign || 'false' }}"
+
+          echo "=== Validating and signing packages for Alpine ${ALPINE_VER} ==="
+          echo "Key rotation needed: ${ROTATION_NEEDED}"
+          echo "Force re-sign: ${FORCE_RESIGN}"
+
+          docker run --rm \
+            -v "$PWD/${ALPINE_VER}:/repo" \
+            -v "$PWD/.abuild-keys:/keys:ro" \
+            -v "$PWD/.abuild-keys/rotation:/new-keys:ro" \
+            alpine:latest sh -c '
+              set -e
+              apk add --no-cache abuild apk-tools openssl
+
+              mkdir -p ~/.abuild /etc/apk/keys
+
+              # Install current keys
+              cp /keys/jambox-65ea124a.rsa ~/.abuild/
+              chmod 600 ~/.abuild/jambox-65ea124a.rsa
+              cp /keys/jambox-65ea124a.rsa.pub ~/.abuild/
+              cp /keys/jambox-65ea124a.rsa.pub /etc/apk/keys/
+              chmod 644 ~/.abuild/jambox-65ea124a.rsa.pub
+
+              echo "PACKAGER_PRIVKEY=~/.abuild/jambox-65ea124a.rsa" >> ~/.abuild/abuild.conf
+
+              TOTAL_PACKAGES=0
+              VALID_SIGS=0
+              INVALID_SIGS=0
+              UNSIGNED=0
+              RESIGNED=0
+
+              for arch in x86_64 aarch64 armv7 armhf; do
+                if [ ! -d "JamBox/${arch}" ]; then
+                  continue
+                fi
+
+                cd "JamBox/${arch}"
+
+                PKG_COUNT=$(ls -1 *.apk 2>/dev/null | wc -l)
+                if [ $PKG_COUNT -eq 0 ]; then
+                  echo "Skipping ${arch} (no packages)"
+                  cd /repo
+                  continue
+                fi
+
+                echo ""
+                echo "=== Processing ${arch} (${PKG_COUNT} packages) ==="
+                TOTAL_PACKAGES=$((TOTAL_PACKAGES + PKG_COUNT))
+
+                for pkg in *.apk; do
+                  # Check signature status
+                  if abuild-sign -v -k ~/.abuild/jambox-65ea124a.rsa "$pkg" 2>/dev/null; then
+                    echo "  ✓ ${pkg}: Valid signature"
+                    VALID_SIGS=$((VALID_SIGS + 1))
+
+                    # Re-sign if key rotation or force-resign
+                    if [ "'"${ROTATION_NEEDED}"'" = "true" ] || [ "'"${FORCE_RESIGN}"'" = "true" ]; then
+                      echo "    → Re-signing ${pkg}"
+                      abuild-sign -k ~/.abuild/jambox-65ea124a.rsa "$pkg"
+                      RESIGNED=$((RESIGNED + 1))
+                    fi
+                  else
+                    SIG_STATUS=$?
+                    if [ $SIG_STATUS -eq 1 ]; then
+                      echo "  ✗ ${pkg}: INVALID signature - re-signing"
+                      INVALID_SIGS=$((INVALID_SIGS + 1))
+                    else
+                      echo "  ⚠ ${pkg}: Unsigned - signing"
+                      UNSIGNED=$((UNSIGNED + 1))
+                    fi
+
+                    # Sign package
+                    if abuild-sign -k ~/.abuild/jambox-65ea124a.rsa "$pkg"; then
+                      echo "    ✓ Signed successfully"
+                      RESIGNED=$((RESIGNED + 1))
+
+                      # Verify signature
+                      if abuild-sign -v -k ~/.abuild/jambox-65ea124a.rsa "$pkg" 2>/dev/null; then
+                        echo "    ✓ Signature verified"
+                      else
+                        echo "    ✗ FAILED to verify signature after signing"
+                        exit 1
+                      fi
+                    else
+                      echo "    ✗ FAILED to sign package"
+                      exit 1
+                    fi
+                  fi
+                done
+
+                cd /repo
+              done
+
+              echo ""
+              echo "=== Package Signature Summary ==="
+              echo "Total packages: ${TOTAL_PACKAGES}"
+              echo "Valid signatures: ${VALID_SIGS}"
+              echo "Invalid signatures (fixed): ${INVALID_SIGS}"
+              echo "Unsigned (fixed): ${UNSIGNED}"
+              echo "Re-signed: ${RESIGNED}"
+
+              if [ $TOTAL_PACKAGES -eq 0 ]; then
+                echo "⚠ WARNING: No packages found"
+              else
+                echo "✓ All packages validated and signed"
+              fi
+            '
+
+      - name: Rotate signing keys
+        if: steps.key-rotation.outputs.rotation-needed == 'true'
+        run: |
+          ALPINE_VER="${{ inputs.alpine-version }}"
+
+          echo "=== Rotating signing keys for ${ALPINE_VER} ==="
+
+          docker run --rm \
+            -v "$PWD/${ALPINE_VER}:/repo" \
+            -v "$PWD/.abuild-keys/rotation:/new-keys:ro" \
+            alpine:latest sh -c '
+              set -e
+              apk add --no-cache abuild apk-tools openssl
+
+              mkdir -p ~/.abuild /etc/apk/keys
+
+              # Get fingerprint from new public key
+              NEW_FINGERPRINT=$(openssl rsa -pubin -in /new-keys/new-public.rsa.pub -text -noout 2>/dev/null | grep -A1 "Public-Key:" | tail -1 | tr -d " \n:" | tail -c 9)
+              echo "New key fingerprint: ${NEW_FINGERPRINT}"
+
+              # Install new keys with fingerprint-based filename
+              cp /new-keys/new-private.rsa ~/.abuild/jambox-${NEW_FINGERPRINT}.rsa
+              chmod 600 ~/.abuild/jambox-${NEW_FINGERPRINT}.rsa
+              cp /new-keys/new-public.rsa.pub ~/.abuild/jambox-${NEW_FINGERPRINT}.rsa.pub
+              cp /new-keys/new-public.rsa.pub /etc/apk/keys/jambox-${NEW_FINGERPRINT}.rsa.pub
+              chmod 644 ~/.abuild/jambox-${NEW_FINGERPRINT}.rsa.pub
+
+              echo "PACKAGER_PRIVKEY=~/.abuild/jambox-${NEW_FINGERPRINT}.rsa" >> ~/.abuild/abuild.conf
+
+              echo "✓ New signing keys installed"
+
+              # Re-sign all packages with new key
+              TOTAL_RESIGNED=0
+
+              for arch in x86_64 aarch64 armv7 armhf; do
+                if [ ! -d "JamBox/${arch}" ]; then
+                  continue
+                fi
+
+                cd "JamBox/${arch}"
+
+                PKG_COUNT=$(ls -1 *.apk 2>/dev/null | wc -l)
+                if [ $PKG_COUNT -eq 0 ]; then
+                  cd /repo
+                  continue
+                fi
+
+                echo ""
+                echo "Re-signing ${PKG_COUNT} packages for ${arch} with new key..."
+
+                for pkg in *.apk; do
+                  if abuild-sign -k ~/.abuild/jambox-${NEW_FINGERPRINT}.rsa "$pkg"; then
+                    TOTAL_RESIGNED=$((TOTAL_RESIGNED + 1))
+                  else
+                    echo "✗ FAILED to re-sign ${pkg}"
+                    exit 1
+                  fi
+                done
+
+                echo "  ✓ Re-signed ${PKG_COUNT} packages"
+                cd /repo
+              done
+
+              echo ""
+              echo "✓ Key rotation complete - ${TOTAL_RESIGNED} packages re-signed"
+              echo "New key fingerprint: ${NEW_FINGERPRINT}"
+            '
+
+          echo ""
+          echo "⚠ IMPORTANT: After this workflow completes successfully:"
+          echo "  1. Update RSA_PRIVATE_KEY secret with NEW_RSA_PRIVATE_KEY value"
+          echo "  2. Update RSA_PUBLIC_KEY secret with NEW_RSA_PUBLIC_KEY value"
+          echo "  3. Delete NEW_RSA_PRIVATE_KEY secret"
+          echo "  4. Delete NEW_RSA_PUBLIC_KEY secret"
+          echo ""
+
+      - name: Generate APKINDEX files
+        run: |
+          ALPINE_VER="${{ inputs.alpine-version }}"
+
+          echo "=== Generating APKINDEX for Alpine ${ALPINE_VER} ==="
+
+          docker run --rm \
+            -v "$PWD/${ALPINE_VER}:/repo" \
+            -v "$PWD/.abuild-keys:/keys:ro" \
+            -w /repo \
+            alpine:latest sh -c '
+              set -e
+              apk add --no-cache abuild apk-tools
+
+              mkdir -p ~/.abuild /etc/apk/keys
+
+              cp /keys/jambox-65ea124a.rsa ~/.abuild/
+              chmod 600 ~/.abuild/jambox-65ea124a.rsa
+
+              cp /keys/jambox-65ea124a.rsa.pub ~/.abuild/
+              cp /keys/jambox-65ea124a.rsa.pub /etc/apk/keys/
+              chmod 644 ~/.abuild/jambox-65ea124a.rsa.pub
+
+              echo "PACKAGER_PRIVKEY=~/.abuild/jambox-65ea124a.rsa" >> ~/.abuild/abuild.conf
+
+              echo "✓ Signing keys configured"
+
+              for arch in x86_64 aarch64 armv7 armhf; do
+                if [ -d "JamBox/${arch}" ] && ls JamBox/${arch}/*.apk >/dev/null 2>&1; then
+                  cd "JamBox/${arch}"
+                  PKG_COUNT=$(ls -1 *.apk | wc -l)
+                  echo ""
+                  echo "Generating APKINDEX for ${arch} (${PKG_COUNT} packages)..."
+
+                  # Remove old APKINDEX
+                  rm -f APKINDEX.tar.gz APKINDEX DESCRIPTION
+
+                  # Generate new APKINDEX
+                  if apk index -o APKINDEX.tar.gz *.apk; then
+                    echo "  ✓ APKINDEX created"
+                  else
+                    echo "  ✗ FAILED to generate APKINDEX"
+                    exit 1
+                  fi
+
+                  # Sign APKINDEX
+                  if abuild-sign -k ~/.abuild/jambox-65ea124a.rsa APKINDEX.tar.gz; then
+                    echo "  ✓ APKINDEX signed"
+                  else
+                    echo "  ✗ FAILED to sign APKINDEX"
+                    exit 1
+                  fi
+
+                  cd /repo
+                else
+                  echo "  ⏭ No packages for ${arch}"
+                fi
+              done
+
+              echo ""
+              echo "✓ All APKINDEX files generated and signed"
+            '
+
+      - name: Validate APKINDEX integrity
+        run: |
+          ALPINE_VER="${{ inputs.alpine-version }}"
+
+          echo "=== Validating APKINDEX for Alpine ${ALPINE_VER} ==="
+
+          docker run --rm \
+            -v "$PWD/${ALPINE_VER}:/repo:ro" \
+            -w /repo \
+            alpine:latest sh -c '
+              set -e
+              apk add --no-cache apk-tools tar
+
+              ERRORS=0
+
+              for arch in x86_64 aarch64 armv7 armhf; do
+                if [ ! -d "JamBox/${arch}" ]; then
+                  continue
+                fi
+
+                PKG_COUNT=$(ls -1 JamBox/${arch}/*.apk 2>/dev/null | wc -l)
+
+                if [ $PKG_COUNT -eq 0 ]; then
+                  echo "Skipping ${arch} (no packages)"
+                  continue
+                fi
+
+                echo "Validating APKINDEX for ${arch} (${PKG_COUNT} packages)..."
+
+                if [ ! -f "JamBox/${arch}/APKINDEX.tar.gz" ]; then
+                  echo "  ✗ ERROR: ${arch} has ${PKG_COUNT} packages but no APKINDEX"
+                  ERRORS=$((ERRORS + 1))
+                  continue
+                fi
+
+                if ! tar -tzf "JamBox/${arch}/APKINDEX.tar.gz" >/dev/null 2>&1; then
+                  echo "  ✗ ERROR: Invalid APKINDEX.tar.gz for ${arch}"
+                  ERRORS=$((ERRORS + 1))
+                  continue
+                fi
+
+                INDEX_COUNT=$(tar -xzf "JamBox/${arch}/APKINDEX.tar.gz" -O APKINDEX 2>/dev/null | grep -c "^P:" || echo "0")
+
+                echo "  Packages: ${PKG_COUNT}, Indexed: ${INDEX_COUNT}"
+
+                if [ "$PKG_COUNT" -ne "$INDEX_COUNT" ]; then
+                  echo "  ⚠ WARNING: Package count mismatch for ${arch}"
+                fi
+
+                echo "  ✓ APKINDEX valid for ${arch}"
+              done
+
+              if [ $ERRORS -gt 0 ]; then
+                echo ""
+                echo "✗ Validation failed with ${ERRORS} error(s)"
+                exit 1
+              fi
+
+              echo ""
+              echo "✓ All APKINDEX files validated successfully"
+            '
+
+      - name: Repository summary
+        run: |
+          BRANCH="${{ inputs.alpine-version }}"
+          echo ""
+          echo "=== Final Repository Summary for ${BRANCH} ==="
+          for arch in x86_64 aarch64 armv7 armhf; do
+            COUNT=$(find "${BRANCH}/JamBox/${arch}" -name "*.apk" 2>/dev/null | wc -l)
+            echo "  ${arch}: ${COUNT} packages"
+          done
+
+      - name: Publish to GitHub Pages
+        run: |
+          ALPINE_VERSION="${{ inputs.alpine-version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p /tmp/new-repo
+          cp -r "${ALPINE_VERSION}" /tmp/new-repo/
+
+          git fetch origin gh-pages:gh-pages 2>/dev/null || git checkout --orphan gh-pages
+          git checkout gh-pages
+
+          mkdir -p "${ALPINE_VERSION}"
+
+          cp -r /tmp/new-repo/"${ALPINE_VERSION}"/* "${ALPINE_VERSION}/"
+
+          touch .nojekyll
+
+          git add "${ALPINE_VERSION}" .nojekyll
+
+          git commit -m "Update Alpine ${ALPINE_VERSION} repository
+
+          Build #${{ github.run_number }}
+
+          - Packages validated and signed
+          - APKINDEX regenerated
+          - Repository integrity verified" || echo "No changes to commit"
+
+          git push origin gh-pages
+
+      - name: Generate repository URL
+        run: |
+          BRANCH="${{ inputs.alpine-version }}"
+          echo ""
+          echo "=========================================="
+          echo "Alpine Repository Published!"
+          echo "=========================================="
+          echo ""
+          echo "Add to /etc/apk/repositories:"
+          echo ""
+          echo "  @jambox https://jambox-it.github.io/aports/${BRANCH}/JamBox"
+          echo ""
+          echo "Install packages with:"
+          echo "  apk add package-name@jambox"
+          echo ""

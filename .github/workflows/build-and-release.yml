@@ -369,11 +369,11 @@ jobs:
     with:
       alpine-version: ${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}
 
-  publish-repository:
-    name: Publish to Alpine Repository
+  sign-and-publish:
+    name: Sign and Publish Alpine Repository
     needs: [detect-changes, filter-existing, build]
     if: needs.filter-existing.outputs.has-new == 'true' && !cancelled()
-    uses: ./.github/workflows/publish-repository.yml
+    uses: ./.github/workflows/sign-and-publish.yml
     permissions:
       contents: write
       pages: write
