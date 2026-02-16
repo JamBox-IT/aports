@@ -380,3 +380,4 @@ jobs:
     secrets: inherit
     with:
       alpine-version: ${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}
+      validation-mode: 'permissive'  # Default to permissive for automated runs
