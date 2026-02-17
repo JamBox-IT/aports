@@ -79,6 +79,10 @@ jobs:
 
       - name: Merge new packages with apk-repo
         run: |
+          if [ ! -d "new-packages" ]; then
+            echo "No new packages were downloaded. Skipping merge."
+            exit 0
+          fi
           ALPINE_VER="${{ inputs.alpine-version }}"
           echo "=== Merging new packages into apk-repo ==="
           cd new-packages
