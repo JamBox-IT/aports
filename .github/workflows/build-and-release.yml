@@ -366,7 +366,6 @@ jobs:
     uses: ./.github/workflows/sign-and-publish.yml
     permissions:
       contents: write
-      pages: write
     secrets: inherit
     with:
       alpine-version: ${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}
