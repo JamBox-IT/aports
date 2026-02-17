@@ -1,0 +1,24 @@
+# Maintainer: Corey De Lasaux <cordelster@gmail.com>
+pkgname=jambox-repo
+pkgver=1.0.0
+pkgrel=0
+pkgdesc="Package that adds the JamBox Repository and key"
+arch="all"
+url="https://jambox-it.github.io"
+license="MIT"
+depends="jambox-keys"
+makedepends=""
+source="
+$pkgname.post-install
+"
+
+# Include post-install script to add repository
+post_install="$pkgname.post-install"
+
+build() {
+
+}
+
+package() {
+
+}
