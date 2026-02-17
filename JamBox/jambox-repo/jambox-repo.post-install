@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Example repository URL
-REPO_URL="https://jambox-it.github.io/apk-repo/v3.16/JamBox"
+REPO_URL="https://jambox-it.github.io/apk-repo/$_rel/JamBox"
 
 # Add the repository to /etc/apk/repositories
 if ! grep -q "$REPO_URL" /etc/apk/repositories; then

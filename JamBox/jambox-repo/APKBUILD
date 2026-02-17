@@ -15,10 +15,4 @@ $pkgname.post-install
 # Include post-install script to add repository
 post_install="$pkgname.post-install"
 
-build() {
 
-}
-
-package() {
-
-}
