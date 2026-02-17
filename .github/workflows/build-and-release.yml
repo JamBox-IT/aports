@@ -262,16 +262,6 @@ jobs:
             exit 1
           fi
 
-      - name: Sign packages
-        shell: alpine.sh {0}
-        continue-on-error: true
-        run: |
-          # Find and sign any unsigned packages
-          find ~/packages -name "*.apk" -type f 2>/dev/null | while read -r pkg; do
-            echo "Signing: $pkg"
-            abuild-sign -k ~/.abuild/jambox-65ea124a.rsa "$pkg" 2>/dev/null || true
-          done
-
       - name: Collect built packages
         shell: alpine.sh {0}
         run: |
@@ -369,14 +359,14 @@ jobs:
     with:
       alpine-version: ${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}
 
-  publish-repository:
-    name: Publish to Alpine Repository
+  sign-and-publish:
+    name: Sign and Publish Alpine Repository
     needs: [detect-changes, filter-existing, build]
     if: needs.filter-existing.outputs.has-new == 'true' && !cancelled()
-    uses: ./.github/workflows/publish-repository.yml
+    uses: ./.github/workflows/sign-and-publish.yml
     permissions:
       contents: write
-      pages: write
     secrets: inherit
     with:
       alpine-version: ${{ github.ref == 'refs/heads/main' && 'edge' || github.ref_name }}
+      validation-mode: 'permissive'  # Default to permissive for automated runs

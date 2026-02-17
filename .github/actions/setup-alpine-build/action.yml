@@ -51,7 +51,8 @@ runs:
         ALPINE_VERSION="${{ inputs.alpine-version }}"
 
         # Install JamBox public key (fingerprint-based filename)
-        echo "${{ inputs.rsa-public-key }}" > /etc/apk/keys/jambox-65ea124a.rsa.pub
+        # Decode base64-encoded key
+        echo "${{ inputs.rsa-public-key }}" | base64 -d > /etc/apk/keys/jambox-65ea124a.rsa.pub
         chmod 644 /etc/apk/keys/jambox-65ea124a.rsa.pub
 
         # Configure /etc/apk/repositories
@@ -80,10 +81,11 @@ runs:
         echo "JOBS=$(nproc)" >> ~/.abuild/abuild.conf
 
         # Install RSA keys with fingerprint-based filename
-        echo "${{ inputs.rsa-private-key }}" > ~/.abuild/jambox-65ea124a.rsa
+        # Decode base64-encoded keys
+        echo "${{ inputs.rsa-private-key }}" | base64 -d > ~/.abuild/jambox-65ea124a.rsa
         chmod 600 ~/.abuild/jambox-65ea124a.rsa
 
-        echo "${{ inputs.rsa-public-key }}" > ~/.abuild/jambox-65ea124a.rsa.pub
+        echo "${{ inputs.rsa-public-key }}" | base64 -d > ~/.abuild/jambox-65ea124a.rsa.pub
         chmod 644 ~/.abuild/jambox-65ea124a.rsa.pub
 
         # Validate keys using openssl

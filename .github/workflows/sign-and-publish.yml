@@ -1,0 +1,160 @@
+name: Sign and Publish Alpine Repository
+
+on:
+  workflow_call:
+    inputs:
+      alpine-version:
+        description: 'Alpine version (edge, v3.19, v3.20, etc.)'
+        required: true
+        type: string
+      validation-mode:
+        description: 'Validation strictness (strict/permissive/skip)'
+        required: false
+        type: string
+        default: 'permissive'
+  workflow_dispatch:
+    inputs:
+      alpine-version:
+        description: 'Alpine version to rebuild'
+        required: true
+        type: choice
+        options:
+          - edge
+          - v3.23
+          - v3.22
+          - v3.21
+          - v3.20
+          - v3.19
+          - v3.18
+      force-resign:
+        description: 'Force re-sign all packages in repository'
+        required: false
+        type: boolean
+        default: false
+      validation-mode:
+        description: 'Validation strictness (strict/permissive/skip)'
+        required: false
+        type: choice
+        options:
+          - strict      # Fail on any validation error
+          - permissive  # Warn but continue on validation errors
+          - skip        # Skip validation entirely
+        default: 'permissive'
+
+permissions:
+  contents: write
+
+jobs:
+  sign-and-publish:
+    name: Sign and Publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout aports (for keys)
+        uses: actions/checkout@v4
+        with:
+          path: aports
+
+      - name: Setup signing keys
+        working-directory: ./aports
+        run: |
+          mkdir -p .abuild-keys
+          echo "${{ secrets.RSA_PRIVATE_KEY }}" | base64 -d > .abuild-keys/jambox-65ea124a.rsa
+          chmod 600 .abuild-keys/jambox-65ea124a.rsa
+          echo "${{ secrets.RSA_PUBLIC_KEY }}" | base64 -d > .abuild-keys/jambox-65ea124a.rsa.pub
+          chmod 644 .abuild-keys/jambox-65ea124a.rsa.pub
+          echo "✓ Signing keys prepared."
+
+      - name: Checkout apk-repo
+        uses: actions/checkout@v4
+        with:
+          repository: JamBox-IT/apk-repo
+          path: apk-repo
+          token: ${{ secrets.PAT_FOR_APK_REPO }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          path: new-packages
+
+      - name: Merge new packages with apk-repo
+        run: |
+          ALPINE_VER="${{ inputs.alpine-version }}"
+          echo "=== Merging new packages into apk-repo ==="
+          cd new-packages
+          for arch_dir in packages-*/; do
+            if [ -d "$arch_dir" ]; then
+              arch=$(basename "$arch_dir" | sed 's/packages-//')
+              DEST_DIR="../apk-repo/${ALPINE_VER}/JamBox/${arch}"
+              mkdir -p "${DEST_DIR}"
+              echo "Merging packages for ${arch} into ${DEST_DIR}"
+              rsync -av "${arch_dir}"*.apk "${DEST_DIR}/"
+            fi
+          done
+          echo "✓ Merge complete."
+          echo "apk-repo content:"
+          ls -R ../apk-repo
+
+      - name: Copy public key to repo root
+        run: |
+          cp aports/.abuild-keys/jambox-65ea124a.rsa.pub apk-repo/
+          echo "✓ Public key copied to apk-repo root."
+
+      - name: Generate APKINDEX files in apk-repo
+        run: |
+          ALPINE_VER="${{ inputs.alpine-version }}"
+          echo "=== Generating APKINDEX for Alpine ${ALPINE_VER} in apk-repo ==="
+          docker run --rm \
+            -v "$PWD/apk-repo/${ALPINE_VER}:/repo" \
+            -v "$PWD/aports/.abuild-keys:/keys:ro" \
+            -w /repo \
+            alpine:latest sh -c '
+              set -e
+              apk add --no-cache abuild apk-tools openssl rsync
+              mkdir -p ~/.abuild /etc/apk/keys
+              cp /keys/jambox-65ea124a.rsa ~/.abuild/
+              chmod 600 ~/.abuild/jambox-65ea124a.rsa
+              cp /keys/jambox-65ea124a.rsa.pub /etc/apk/keys/
+              chmod 644 /etc/apk/keys/jambox-65ea124a.rsa.pub
+              echo "PACKAGER_PRIVKEY=~/.abuild/jambox-65ea124a.rsa" >> ~/.abuild/abuild.conf
+              echo "✓ Signing keys configured in container."
+              for arch in x86_64 aarch64 armv7 armhf; do
+                if [ -d "JamBox/${arch}" ] && ls JamBox/${arch}/*.apk >/dev/null 2>&1; then
+                  cd "JamBox/${arch}"
+                  echo "Generating APKINDEX for ${arch}..."
+                  apk index --allow-untrusted -o APKINDEX.tar.gz *.apk
+                  abuild-sign -k ~/.abuild/jambox-65ea124a.rsa APKINDEX.tar.gz
+                  echo "✓ APKINDEX generated and signed for ${arch}."
+                  cd /repo
+                else
+                  echo "⏭ No packages found for ${arch}."
+                fi
+              done'
+
+      - name: Commit and Push to apk-repo
+        working-directory: ./apk-repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          if ! git diff --staged --quiet; then
+            git commit -m "Update Alpine ${{ inputs.alpine-version }} repository from aports build #${{ github.run_number }}"
+            git push
+            echo "✓ Changes pushed to apk-repo."
+          else
+            echo "✓ No changes to commit to apk-repo."
+          fi
+
+      - name: Generate repository URL
+        run: |
+          ALPINE_VER="${{ inputs.alpine-version }}"
+          REPO_URL="https://jambox-it.github.io/apk-repo"
+          echo "=========================================="
+          echo "Alpine Repository Published!"
+          echo "=========================================="
+          echo "Add the public key to your Alpine system:"
+          echo "wget -O /etc/apk/keys/jambox-65ea124a.rsa.pub ${REPO_URL}/jambox-65ea124a.rsa.pub"
+          echo ""
+          echo "Then add the repository to /etc/apk/repositories:"
+          echo "${REPO_URL}/${ALPINE_VER}/JamBox"
+          echo ""
