@@ -43,7 +43,6 @@ on:
 
 permissions:
   contents: write
-  pages: write
 
 jobs:
   sign-and-publish:
