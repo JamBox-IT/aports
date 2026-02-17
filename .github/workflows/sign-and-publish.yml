@@ -720,7 +720,7 @@ jobs:
 
           mkdir -p "${ALPINE_VERSION}"
 
-          cp -r /tmp/new-repo/"${ALPINE_VERSION}"/* "${ALPINE_VERSION}/"
+          cp -rf /tmp/new-repo/"${ALPINE_VERSION}"/* "${ALPINE_VERSION}/"
 
           touch .nojekyll
 
