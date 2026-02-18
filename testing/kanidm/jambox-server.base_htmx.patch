@@ -3,19 +3,19 @@ index fe0780a23..52aba291f 100644
 --- a/server/core/templates/base_htmx.html
 +++ b/server/core/templates/base_htmx.html
 @@ -34,9 +34,13 @@
-                (% block body %)(% endblock %)
-                <footer class="footer mt-auto py-3 bg-body-tertiary text-end">
-                        <div class="container">
--                               <span class="text-muted">Powered by <a
--                                               href="https://kanidm.com">Kanidm</a></span>
--                       </div>
-+                               <span class="text-muted">
-+                                       Presented by <a
-+                                               href="https://jambox-it.github.io" target="_blank">JamBox</a>
+ 		(% block body %)(% endblock %)
+ 		<footer class="footer mt-auto py-3 bg-body-tertiary text-end">
+ 			<div class="container">
+-				<span class="text-muted">Powered by <a
+-						href="https://kanidm.com">Kanidm</a></span>
+-			</div>
++				<span class="text-muted">
++					Presented by <a
++						href="https://jambox-it.github.io" target="_blank">JamBox</a>
 +
-+                                       Powered by <a
-+                                               href="https://kanidm.com" target="_blank">Kanidm</a></span>
-+                               </div>
-                </footer>
-        </body>
++					Powered by <a
++						href="https://kanidm.com" target="_blank">Kanidm</a></span>
++				</div>
+ 		</footer>
+ 	</body>
  </html>
