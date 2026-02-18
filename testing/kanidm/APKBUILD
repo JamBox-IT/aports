@@ -45,6 +45,7 @@ subpackages="
 	"
 source="$pkgname-$pkgver.tar.gz::https://github.com/kanidm/kanidm/archive/refs/tags/v$pkgver.tar.gz
 	initgroups-hooks.patch
+	jambox-server.base_htmx.patch
 	release_alpine.toml
 	kanidmd.initd
 	kanidm-unixd.initd
@@ -184,4 +185,5 @@ c9b2b200363034cfc930279be15d60b1cfcf68f4e9d9e491e1adf093b4ea0ad503644994569a6ca4
 08ab2aa7c1e8b14740172df89f3d265e1a7a06da083f65e8a296f7ac4cfdce7629b624d294a9de9bf4abf42769ca88efd10cb0edbbeb2320971b92d1bee393c0  kanidm-unixd-tasks.initd
 6dec53d50389a7138163eeecef4dbcfe3a3cc474d33e66fcda65272b361219ffa43a59a042d5d59743e3a0b2df00ebcb273418920ebdc0354f52b22a9850bf5f  use-var-lib-kanidm.patch
 b4cfa9b12969f9df88462c5b48105d3120b3538ea1392cfa653f58f2bebabcee2f0b5e6b7b6bc91f3c944ed3e0e5b74d1ddfaa6fc54c58d68be025bd58ea3efd  server-https-port.patch
+cdba981bae69cde4b51d8a1f044825a3a05b03a9e59eab869a634fb30ce66edd06d1b389069ca404ac1b505fb8f0c369eaa48b5c33737ca4a597ae4131ea4c7b  jambox-server.base_htmx.patch
 "
