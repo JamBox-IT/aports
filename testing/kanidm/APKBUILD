@@ -69,12 +69,13 @@ _cargoopts="--frozen --release
 prepare() {
 	default_prepare
 
-	# Install profile BEFORE cargo fetch since it may be needed
-	install -Dm644 "$srcdir"/release_alpine.toml -t "$builddir"/libs/profiles/
 	cargo fetch --target="$CTARGET"
+	# Install profile to the source tree where kanidm expects it
+	install -Dm644 "$srcdir"/release_alpine.toml "$builddir"/libs/profiles/release_alpine.toml
 }
 
 build() {
+	cd "$builddir"
 	KANIDM_BUILD_PROFILE="$_profile" \
 	cargo auditable build $_cargoopts
 }
