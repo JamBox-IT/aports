@@ -61,8 +61,8 @@ runs:
         ${{ inputs.mirror-url }}/${ALPINE_VERSION}/main
         # Alpine community repository
         ${{ inputs.mirror-url }}/${ALPINE_VERSION}/community
-        # Alpine testing repository (needed for packages in testing/)
-        ${{ inputs.mirror-url }}/${ALPINE_VERSION}/testing
+        # Alpine testing repository (always from edge, testing doesn't exist on stable releases)
+        @testing ${{ inputs.mirror-url }}/edge/testing
         # Alpine edge repository (for newer toolchains like rust/cargo when building on stable)
         @edge ${{ inputs.mirror-url }}/edge/main
         # JamBox custom repository (may not exist on first build)
