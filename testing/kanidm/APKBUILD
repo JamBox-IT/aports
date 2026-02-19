@@ -69,8 +69,8 @@ _cargoopts="--frozen --release
 prepare() {
 	default_prepare
 
-	cargo fetch --target="$CTARGET"
-	install -Dm644 "$srcdir"/release_alpine.toml -t libs/profiles/
+	cargo fetch --target="$CTARGET" --locked
+	install -Dm644 "$srcdir"/release_alpine.toml -t "$builddir"/libs/profiles/
 }
 
 build() {
