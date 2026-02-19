@@ -1,7 +1,7 @@
 maintainer="Corey DeLasaux <cordelster@gmail.com>"
 pkgname=kanidm
-pkgver=1.8.6
-pkgrel=2
+pkgver=1.9.0
+pkgrel=0
 pkgdesc="A identity management server, acting as an authority on account information"
 url="https://kanidm.github.io"
 arch="all !x86 !armhf !armv7 !riscv64"
