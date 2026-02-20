@@ -15,8 +15,8 @@ makedepends="
 	bash
 	bc
 	brotli
-	cargo@edge
-	cargo-auditable@edge
+	cargo
+	cargo-auditable
 	clang-dev
 	cmake
 	samurai
@@ -26,7 +26,7 @@ makedepends="
 	py3-setuptools
 	python3-dev
 	rsync
-	rust@edge
+	rust
 	"
 install="
 	$pkgname-server.pre-install
