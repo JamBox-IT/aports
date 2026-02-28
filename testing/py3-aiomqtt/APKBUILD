@@ -1,0 +1,39 @@
+# Contributor: Corey DeLasaux <cordelster@gmail.com> 
+# Maintainer: 
+pkgname=py3-aiomqtt
+pkgver=2.5.0
+pkgrel=0
+_pkgreal=aiomqtt
+pkgdesc="The idiomatic asyncio MQTT client"
+url="https://pypi.org/project/aiomqtt/"
+arch="noarch"
+license=""
+depends=""
+makedepends="py3-gpep517 py3-setuptools py3-hatchling py3-wheel"
+checkdepends="py3-pytest"
+subpackages="$pkgname-pyc"
+source="$_pkgreal-$pkgver.tar.gz::https://github.com/empicano/aiomqtt/archive/refs/tags/v$pkgver.tar.gz"
+builddir=""
+options=""
+
+build() {
+        gpep517 build-wheel \
+                --wheel-dir .dist \
+                --output-fd 3 3>&1 >&2
+}
+
+check() {
+        python3 -m venv --clear --without-pip --system-site-packages 
+.testenv
+        .testenv/bin/python3 -m installer .dist/*.whl
+        .testenv/bin/python3 -m pytest
+}
+
+package() {
+        python3 -m installer -d "$pkgdir" \
+                .dist/*.whl
+}
+
+sha512sums="
+86a4905200345e0d51117e4afa8a0984b5a10e48f3af354ad23ac5704a2a25d43c882fc3d4cd80ea06f9200ea5d5a604c327e1950b61fcbce115429774b5215d aiomqtt-2.5.0.tar.gz
+"
