@@ -17,7 +17,9 @@ builddir=""
 options=""
 
 build() {
+        export SETUPTOOLS_SCM_PRETEND_VERSION=$pkgver
         gpep517 build-wheel \
+                --backend setuptools.build_meta \
                 --wheel-dir .dist \
                 --output-fd 3 3>&1 >&2
 }
