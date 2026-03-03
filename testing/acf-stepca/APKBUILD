@@ -9,7 +9,7 @@ arch="noarch"
 license="GPL-3.0-only"
 options="!check" # no test suite
 depends="acf-core step-certificates jq"
-source="https://gitlab.alpinelinux.org/jambox-it/acf-stepca/releases/download/v$pkgver/acf-stepca-$pkgver.tar.bz2"
+source="https://github.com/jambox-it/acf-stepca/releases/download/v$pkgver/acf-stepca-$pkgver.tar.bz2"
 builddir="$srcdir/$pkgname-$pkgver"
 
 package() {
