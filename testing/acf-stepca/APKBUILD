@@ -1,0 +1,21 @@
+# Contributor: Corey De Lasaux <cordelster@gmail.com>
+# Maintainer: Corey De Lasaux <cordelster@gmail.com>
+pkgname=acf-stepca
+pkgver=0.1.2
+pkgrel=0
+pkgdesc="Web-based system administration interface for step certificates"
+url=""
+arch="noarch"
+license="GPL-3.0-only"
+options="!check" # no test suite
+depends="acf-core step-certificates jq"
+source="https://gitlab.alpinelinux.org/jambox-it/acf-stepca/releases/download/v$pkgver/acf-stepca-$pkgver.tar.bz2"
+builddir="$srcdir/$pkgname-$pkgver"
+
+package() {
+	make DESTDIR="$pkgdir" install
+}
+
+sha512sums="
+d4c2f69366294dffafd9f3977a9619d2937852868162db2a31a6242b6b7f4a33cd13de6ecafd07de9c84330c29c6d8bff29740da8d38c2f0fc9102937ce8d18f  acf-stepca-0.1.2.tar.bz2
+"
