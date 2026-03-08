@@ -36,5 +36,5 @@ package() {
 }
 
 sha512sums="
-421c1ca1dee915a5554c361a26491595a858728a0b7a1c3e0dc712b5c730f53dea175aefe5fff9e4ac68752ca029cc50e963cfadfe2de55ee27b0ef4e38679ca7a6652f1fa1d41e3cc2e493687b s6-openrc-compat-0.1.0.tar.gz
+cfd5001e70ee7835e87eafff29d1b2de70405ea175aefe5fff9e4ac68752ca029cc50e963cfadfe2de55ee27b0ef4e38679ca7a6652f1fa1d41e3cc2e493687b s6-openrc-compat-0.1.0.tar.gz
 "
