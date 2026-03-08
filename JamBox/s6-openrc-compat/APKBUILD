@@ -9,7 +9,7 @@ license="GPL-3.0-or-later"
 depends="s6 s6-overlay"
 makedepends="make sed shellcheck"
 subpackages=""
-source="$pkgname-$pkgver.tar.gz"
+source="https://github.com/jambox-it/$pkgname/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz"
 builddir="$srcdir/$pkgname-$pkgver"
 
 
