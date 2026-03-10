@@ -1,7 +1,7 @@
 # Contributor: Corey De Lasaux <cordelster@gmail.com>
 # Maintainer: Corey De Lasaux <cordelster@gmail.com>
 pkgname=acf-stepca
-pkgver=0.1.2
+pkgver=0.1.3
 pkgrel=0
 pkgdesc="Web-based system administration interface for step certificates"
 url="https://github.com/jambox-it/acf-stepca"
@@ -17,5 +17,5 @@ package() {
 }
 
 sha512sums="
-4baa448db1fd6825117a72fab931f739d750a30a96b51a77891fe1020881bc942c8f15662c4e333913ed0cfea26abee099369d70e957733c7ffc65415b4e9236  acf-stepca-0.1.2.tar.bz2
+af1edcbb0ba7ea751b9dea91d16b8161ef33fe136453b59a30128bd482fde984ba7556e82bd45c38c95e2e9f85ced97bcb49f882f1c8608876ae0072b44634f9  acf-stepca-0.1.3.tar.bz2
 "
