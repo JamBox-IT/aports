@@ -1,0 +1,13 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 3b023eac1..ac28ba31b 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -4,7 +4,7 @@ authors = [
+     "William Brown <william@blackhats.net.au>",
+     "James Hodgkinson <james@terminaloutcomes.com>",
+ ]
+-rust-version = "1.93"
++rust-version = "1.91"
+ edition = "2021"
+ license = "MPL-2.0"
+ homepage = "https://github.com/kanidm/kanidm/"
