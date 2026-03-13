@@ -126,11 +126,7 @@ jobs:
                 if [ -d "JamBox/${arch}" ] && ls JamBox/${arch}/*.apk >/dev/null 2>&1; then
                   cd "JamBox/${arch}"
                   echo "Generating APKINDEX for ${arch}..."
-                  apk index --allow-untrusted -o APKINDEX.tar.gz *.apk
-                  # apk v3 uses A:<arch> not A:noarch for download URL construction
-                  tar -xzf APKINDEX.tar.gz APKINDEX
-                  sed -i "s/^A:noarch$/A:${arch}/" APKINDEX
-                  tar -czf APKINDEX.tar.gz APKINDEX && rm -f APKINDEX
+                  apk mkndx --allow-untrusted --arch "${arch}" -o APKINDEX.tar.gz *.apk
                   abuild-sign -k ~/.abuild/jambox-65ea124a.rsa APKINDEX.tar.gz
                   echo "✓ APKINDEX generated and signed for ${arch}."
                   cd /repo
