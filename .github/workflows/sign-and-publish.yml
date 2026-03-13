@@ -136,6 +136,10 @@ jobs:
                 fi
               done'
 
+          # Fix ownership: Docker runs as root, files land as root on the host.
+          # Runner user needs write access for the tar repack in step 2.
+          sudo chown -R "$(id -u):$(id -g)" "$PWD/apk-repo/${ALPINE_VER}/"
+
           # Step 2: On the Ubuntu host (GNU tar, not busybox), patch A:noarch
           # entries to A:<real-arch> in each APKINDEX.
           #
