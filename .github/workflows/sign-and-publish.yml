@@ -124,8 +124,11 @@ jobs:
                 dir="JamBox/${arch}"
                 if [ -d "${dir}" ] && ls "${dir}"/*.apk >/dev/null 2>&1; then
                   echo "Generating APKINDEX for ${arch}..."
-                  apk mkndx --allow-untrusted --arch "${arch}" -o "${dir}/APKINDEX.tar.gz" "${dir}"/*.apk
-                  abuild-sign -k ~/.abuild/jambox-65ea124a.rsa "${dir}/APKINDEX.tar.gz"
+                  apk mkndx --allow-untrusted \
+                    --arch "${arch}" \
+                    --sign-key ~/.abuild/jambox-65ea124a.rsa \
+                    -o "${dir}/APKINDEX.tar.gz" \
+                    "${dir}"/*.apk
                   echo "✓ APKINDEX generated and signed for ${arch}."
                 else
                   echo "⏭ No packages found for ${arch}."
