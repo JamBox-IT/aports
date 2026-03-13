@@ -129,6 +129,7 @@ jobs:
                   # -o: write output tar directly (apk-tools native format, no ./
                   #     prefix, readable by apk clients).
                   apk index --allow-untrusted -o "${dir}/APKINDEX.tar.gz" "${dir}"/*.apk
+                  chmod 644 "${dir}/APKINDEX.tar.gz"
                   echo "Generated unsigned APKINDEX.tar.gz for ${arch}."
                 else
                   echo "No packages found for ${arch}, skipping."
