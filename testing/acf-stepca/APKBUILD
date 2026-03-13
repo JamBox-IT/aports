@@ -2,7 +2,7 @@
 # Maintainer: Corey De Lasaux <cordelster@gmail.com>
 pkgname=acf-stepca
 pkgver=0.1.3
-pkgrel=0
+pkgrel=1
 pkgdesc="Web-based system administration interface for step certificates"
 url="https://github.com/jambox-it/acf-stepca"
 arch="noarch"
