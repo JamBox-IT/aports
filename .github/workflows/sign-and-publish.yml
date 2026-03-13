@@ -64,12 +64,14 @@ jobs:
           chmod 644 .abuild-keys/jambox-65ea124a.rsa.pub
           echo "✓ Signing keys prepared."
 
-      - name: Checkout apk-repo
+      - name: Checkout apk-repo (sparse)
         uses: actions/checkout@v4
         with:
           repository: JamBox-IT/apk-repo
           path: apk-repo
           token: ${{ secrets.PAT_FOR_APK_REPO }}
+          sparse-checkout: ${{ inputs.alpine-version }}/JamBox
+          sparse-checkout-cone-mode: true
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -96,8 +98,11 @@ jobs:
             fi
           done
           echo "✓ Merge complete."
-          echo "apk-repo content:"
-          ls -R ../apk-repo
+          echo "apk-repo package counts:"
+          for arch in x86_64 aarch64 armv7 armhf; do
+            COUNT=$(find "../apk-repo/${ALPINE_VER}/JamBox/${arch}" -name "*.apk" 2>/dev/null | wc -l)
+            echo "  ${arch}: ${COUNT} packages"
+          done
 
       - name: Copy public key to repo root
         run: |
@@ -140,6 +145,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          touch .nojekyll
           git add .
           if ! git diff --staged --quiet; then
             git commit -m "Update Alpine ${{ inputs.alpine-version }} repository from aports build #${{ github.run_number }}"
