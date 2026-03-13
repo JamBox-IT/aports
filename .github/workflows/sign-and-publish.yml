@@ -107,108 +107,28 @@ jobs:
       - name: Generate APKINDEX files in apk-repo
         run: |
           ALPINE_VER="${{ inputs.alpine-version }}"
-          REPO_BASE="$PWD/apk-repo/${ALPINE_VER}/JamBox"
           echo "=== Generating APKINDEX for Alpine ${ALPINE_VER} in apk-repo ==="
-
-          # Step 1: Use Alpine container to run `apk index` which produces a
-          # correctly-formatted tar (no "./" prefix on filenames, unlike busybox
-          # tar). This gives us an unsigned APKINDEX.tar.gz per arch directory.
-          # We intentionally do NOT sign here — signing happens after patching.
-          docker run --rm \
-            -v "$PWD/apk-repo/${ALPINE_VER}:/repo" \
-            -w /repo \
-            alpine:latest sh -c '
-              set -e
-              # apk-tools is pre-installed; no extra packages needed for indexing
-              for arch in x86_64 aarch64 armv7 armhf; do
-                dir="JamBox/${arch}"
-                if [ -d "${dir}" ] && ls "${dir}"/*.apk >/dev/null 2>&1; then
-                  echo "Running apk index for ${arch}..."
-                  # apk index reads .PKGINFO from each .apk and writes APKINDEX.
-                  # --allow-untrusted: accept unsigned .apk files during indexing.
-                  # -o: write output tar directly (apk-tools native format, no ./
-                  #     prefix, readable by apk clients).
-                  apk index --allow-untrusted -o "${dir}/APKINDEX.tar.gz" "${dir}"/*.apk
-                  chmod 644 "${dir}/APKINDEX.tar.gz"
-                  echo "Generated unsigned APKINDEX.tar.gz for ${arch}."
-                else
-                  echo "No packages found for ${arch}, skipping."
-                fi
-              done'
-
-          # Fix ownership: Docker runs as root, files land as root on the host.
-          # Runner user needs write access for the tar repack in step 2.
-          sudo chown -R "$(id -u):$(id -g)" "$PWD/apk-repo/${ALPINE_VER}/"
-
-          # Step 2: On the Ubuntu host (GNU tar, not busybox), patch A:noarch
-          # entries to A:<real-arch> in each APKINDEX.
-          #
-          # Root cause: abuild writes A:noarch into .PKGINFO for noarch packages.
-          # apk index faithfully copies this as A:noarch into APKINDEX. apk v3
-          # clients then construct download URLs as noarch/<pkg>.apk, which does
-          # not exist (packages live under the real arch directory). Alpine's own
-          # build infrastructure always rewrites A:noarch → A:<arch> at index
-          # generation time; we replicate that here.
-          #
-          # GNU tar (unlike busybox tar) preserves exact filenames in archives
-          # without adding "./" prefixes, so repacking with GNU tar is safe.
-          for arch in x86_64 aarch64 armv7 armhf; do
-            INDEX_TAR="${REPO_BASE}/${arch}/APKINDEX.tar.gz"
-            if [ ! -f "${INDEX_TAR}" ]; then
-              continue
-            fi
-            echo "Patching A:noarch -> A:${arch} in APKINDEX for ${arch}..."
-
-            WORK_DIR=$(mktemp -d)
-            trap "rm -rf '${WORK_DIR}'" EXIT
-
-            # Extract using GNU tar — filenames come out without "./" prefix.
-            tar -xzf "${INDEX_TAR}" -C "${WORK_DIR}"
-
-            # Verify the extracted file is named "APKINDEX" (no "./" prefix).
-            # If something went wrong and it has a "./" prefix, abort clearly.
-            if [ ! -f "${WORK_DIR}/APKINDEX" ]; then
-              echo "ERROR: Expected ${WORK_DIR}/APKINDEX but got:"
-              ls -la "${WORK_DIR}/"
-              exit 1
-            fi
-
-            # Replace A:noarch with A:<arch>. This is an exact-line match to
-            # avoid accidentally touching package names or descriptions that
-            # might contain the substring "noarch".
-            sed -i "s/^A:noarch\$/A:${arch}/" "${WORK_DIR}/APKINDEX"
-
-            # Repack with GNU tar. -C changes into the work dir so the archive
-            # member is stored as "APKINDEX" (not "./APKINDEX" or an abs path).
-            tar -czf "${INDEX_TAR}" -C "${WORK_DIR}" APKINDEX
-
-            rm -rf "${WORK_DIR}"
-            trap - EXIT
-            echo "Patched APKINDEX.tar.gz for ${arch}."
-          done
-
-          # Step 3: Sign each APKINDEX.tar.gz with abuild-sign inside the
-          # Alpine container. abuild-sign prepends the RSA signature as a
-          # .SIGN.RSA.<keyname>.pub member to the tar, which is what apk
-          # clients verify on install.
           docker run --rm \
             -v "$PWD/apk-repo/${ALPINE_VER}:/repo" \
             -v "$PWD/aports/.abuild-keys:/keys:ro" \
             -w /repo \
             alpine:latest sh -c '
               set -e
-              apk add --no-cache abuild
+              apk add --no-cache abuild apk-tools
               mkdir -p ~/.abuild /etc/apk/keys
               cp /keys/jambox-65ea124a.rsa ~/.abuild/
               chmod 600 ~/.abuild/jambox-65ea124a.rsa
               cp /keys/jambox-65ea124a.rsa.pub /etc/apk/keys/
               chmod 644 /etc/apk/keys/jambox-65ea124a.rsa.pub
               for arch in x86_64 aarch64 armv7 armhf; do
-                index="JamBox/${arch}/APKINDEX.tar.gz"
-                if [ -f "${index}" ]; then
-                  echo "Signing APKINDEX.tar.gz for ${arch}..."
-                  abuild-sign -k ~/.abuild/jambox-65ea124a.rsa "${index}"
-                  echo "Signed APKINDEX.tar.gz for ${arch}."
+                dir="JamBox/${arch}"
+                if [ -d "${dir}" ] && ls "${dir}"/*.apk >/dev/null 2>&1; then
+                  echo "Generating APKINDEX for ${arch}..."
+                  apk mkndx --allow-untrusted --arch "${arch}" -o "${dir}/APKINDEX.tar.gz" "${dir}"/*.apk
+                  abuild-sign -k ~/.abuild/jambox-65ea124a.rsa "${dir}/APKINDEX.tar.gz"
+                  echo "✓ APKINDEX generated and signed for ${arch}."
+                else
+                  echo "⏭ No packages found for ${arch}."
                 fi
               done'
           echo "=== APKINDEX generation and signing complete. ==="
