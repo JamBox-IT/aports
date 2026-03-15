@@ -1,38 +1,50 @@
 # Maintainer: Corey De Lasaux <cordelster@gmail.com>
 pkgname=s6-openrc-compat
 pkgver=0.2.0
+<<<<<<< Updated upstream
 pkgrel=0
+=======
+pkgrel=1
+>>>>>>> Stashed changes
 pkgdesc="OpenRC compatibility layer for s6-overlay"
 url="https://github.com/jambox-it/s6-openrc-compat"
 arch="all"
 license="GPL-3.0-or-later"
 depends="s6"
 makedepends="make sed shellcheck"
-subpackages=""
+subpackages="s6-openrc-compat-hassio:hassio"
 source="https://github.com/jambox-it/$pkgname/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz"
 builddir="$srcdir/$pkgname-$pkgver"
 
+_s6_run_dir=/run/s6/legacy-services
 
 prepare() {
 	default_prepare
 }
 
 build() {
-	make
+	make S6_RUN_DIR="$_s6_run_dir"
 }
 
 check() {
-	make check
+	make check S6_RUN_DIR="$_s6_run_dir"
 }
 
 package() {
-	# Override BINDIR for Alpine standards if needed
-	# Alpine usually puts user-facing binaries in /usr/bin
 	make install \
 		DESTDIR="$pkgdir" \
 		PREFIX=/usr \
 		BINDIR=/usr/bin \
-		SYSCONFDIR=/etc
+		SYSCONFDIR=/etc \
+		S6_RUN_DIR="$_s6_run_dir"
+}
+
+hassio() {
+	pkgdesc="Home Assistant addon cont-init integration for s6-openrc-compat"
+	depends="$pkgname"
+	install -d "$subpkgdir/etc/cont-init.d"
+	install -m 755 "$pkgdir/usr/bin/init-openrc-compat.sh" \
+		"$subpkgdir/etc/cont-init.d/10-s6-openrc-compat.sh"
 }
 
 sha512sums="
