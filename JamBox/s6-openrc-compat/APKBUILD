@@ -1,11 +1,7 @@
 # Maintainer: Corey De Lasaux <cordelster@gmail.com>
 pkgname=s6-openrc-compat
 pkgver=0.2.0
-<<<<<<< Updated upstream
-pkgrel=0
-=======
 pkgrel=1
->>>>>>> Stashed changes
 pkgdesc="OpenRC compatibility layer for s6-overlay"
 url="https://github.com/jambox-it/s6-openrc-compat"
 arch="all"
