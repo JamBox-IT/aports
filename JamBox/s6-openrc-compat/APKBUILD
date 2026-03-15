@@ -1,7 +1,7 @@
 # Maintainer: Corey De Lasaux <cordelster@gmail.com>
 pkgname=s6-openrc-compat
 pkgver=0.2.0
-pkgrel=1
+pkgrel=2
 pkgdesc="OpenRC compatibility layer for s6-overlay"
 url="https://github.com/jambox-it/s6-openrc-compat"
 arch="all"
@@ -12,6 +12,7 @@ subpackages="s6-openrc-compat-hassio:hassio"
 source="https://github.com/jambox-it/$pkgname/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz"
 builddir="$srcdir/$pkgname-$pkgver"
 
+_bindir=/usr/bin
 _s6_run_dir=/run/s6/legacy-services
 
 prepare() {
@@ -19,18 +20,18 @@ prepare() {
 }
 
 build() {
-	make S6_RUN_DIR="$_s6_run_dir"
+	make BINDIR="$_bindir" S6_RUN_DIR="$_s6_run_dir"
 }
 
 check() {
-	make check S6_RUN_DIR="$_s6_run_dir"
+	make check BINDIR="$_bindir" S6_RUN_DIR="$_s6_run_dir"
 }
 
 package() {
 	make install \
 		DESTDIR="$pkgdir" \
 		PREFIX=/usr \
-		BINDIR=/usr/bin \
+		BINDIR="$_bindir" \
 		SYSCONFDIR=/etc \
 		S6_RUN_DIR="$_s6_run_dir"
 }
