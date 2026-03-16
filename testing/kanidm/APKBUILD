@@ -1,6 +1,6 @@
 maintainer="Corey DeLasaux <cordelster@gmail.com>"
 pkgname=kanidm
-pkgver=1.9.1
+pkgver=1.9.2
 pkgrel=0
 pkgdesc="A identity management server, acting as an authority on account information"
 url="https://kanidm.github.io"
@@ -180,7 +180,7 @@ rlm_python() {
 }
 
 sha512sums="
-0207220bd05813eb343d15a2d6d2d2eaa2e102f29d6e51d84d2d7aa2d6f80121c0eec18f7fcbccf3e59455823fbfbefb64d8edf82aabaa24eebdb9d2dd5afc47  kanidm-1.9.1.tar.gz
+f3bc602f7bb56782e4758580e8efc59ba90e13cbd74b46b91aa43a47253e346af8b264ff403316cfa704a1fe016cb7e7326db22c3b779d7427601024e41aac8e  kanidm-1.9.2.tar.gz
 db7a5663f84798b1b6dfacb2396f26cd24d45cf84a43c723f436f0af12146d6ae1675c90b628836d4dbb22d4361c8700a6b824886ce283768a5f29440ecdd4c5  initgroups-hooks.patch
 1ee9fd645f9f84d39bf2e7e313f76957e2bc66f3a8d17fd17ae437ac646b4da25246c82ab00cb2c794a4503ea9b2aa2a00b3d99163593e4441874f201e8b1f15  jambox-server.base_htmx.patch
 fffe8acee0b77cba97a12c4f1328f0afcadc181d4652f501066aaca0f58ae8cd9301b595442672c43442605e72709eb06d0a9d1b6739f8c97fa4e507b0d82946  release_alpine.toml
