@@ -1,7 +1,7 @@
 # Maintainer: Corey De Lasaux <cordelster@gmail.com>
 pkgname=s6-openrc-compat
-pkgver=0.2.0
-pkgrel=2
+pkgver=0.3.0
+pkgrel=0
 pkgdesc="OpenRC compatibility layer for s6-overlay"
 url="https://github.com/jambox-it/s6-openrc-compat"
 arch="all"
@@ -38,12 +38,12 @@ package() {
 
 hassio() {
 	pkgdesc="Home Assistant addon cont-init integration for s6-openrc-compat"
-	depends="$pkgname"
+	depends=""
 	install -d "$subpkgdir/etc/cont-init.d"
 	install -m 755 "$pkgdir/usr/bin/init-openrc-compat.sh" \
 		"$subpkgdir/etc/cont-init.d/10-s6-openrc-compat.sh"
 }
 
 sha512sums="
-bfb5bbddd50e437f3894af1c0f09d492c4a86d92551bd587b55a837d71257b72c7fc253d8b00eac16cb6a244dd257d190183a9d42f4ce656d140c650a159494b  s6-openrc-compat-0.2.0.tar.gz
+7dc5d4ec6ed3b4a84dc08754a31447effe3fea544500f2812edd993ec13114138fce283e1051e07519b80a872b427e87122e592fc00f7b0df22796711e6cd642  s6-openrc-compat-0.3.0.tar.gz
 "
