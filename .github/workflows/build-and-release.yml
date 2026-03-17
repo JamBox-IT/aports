@@ -143,12 +143,21 @@ jobs:
     name: Build Packages
     needs: [detect-changes, filter-existing]
     if: needs.filter-existing.outputs.has-new == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
     continue-on-error: true  # Allow partial build failures
     strategy:
       fail-fast: false
       matrix:
-        arch: [x86_64, aarch64, armv7, armhf]
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm  # native ARM64, no QEMU
+          - arch: armv7
+            runner: ubuntu-latest
+          - arch: armhf
+            runner: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
