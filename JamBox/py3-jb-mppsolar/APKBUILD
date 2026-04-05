@@ -1,0 +1,40 @@
+# Contributor: Corey DeLasaux <cordelster@gmail.com>
+# Maintainer: Corey DeLasaux <cordelster@gmail.com>
+pkgname=py3-jb-mppsolar
+_pkgreal=mpp-solar
+pkgver=0.16.57b
+pkgrel=0
+pkgdesc="Package to communicate with Solar inverters and BMSs"
+url="http://packages.python.org/pypi/mppsolar"
+arch="noarch"
+license="MIT"
+depends="python3 py3-paho-mqtt py3-pyserial py3-packaging py3-pydantic py3-parsing py3-yaml py3-typing-extensions py3-strenum py3-mongo py3-pymodbus py3-requests py3-psycopg2 py3-psutil"
+checkdepends="python3-dev pytest"
+makedepends="py3-setuptools py3-gpep517 py3-wheel python3-dev poetry py3-paho-mqtt py3-pip py3-psycopg2"
+#source="https://files.pythonhosted.org/packages/96/8a/93c950c2250f376eb9d258aa9bb84b32f3bf676ec35f50f2722ce656fa76/mppsolar-0.16.29.tar.gz"
+source="$_pkgreal-$pkgver.tar.gz::https://github.com/cordelster/mpp-solar/archive/refs/tags/$pkgver.tar.gz
+        "
+builddir="$srcdir/$_pkgreal-$pkgver"
+options="!check"
+
+build() {
+	gpep517 build-wheel \
+		--wheel-dir .dist \
+		--output-fd 3 3>&1 >&2
+}
+
+check() {
+	python3 -m venv --clear --without-pip --system-site-packages .testenv
+	.testenv/bin/python3 -m installer .dist/*.whl
+	.testenv/bin/python3 -m pytest
+}
+
+package() {
+#	python3 -m installer -d "$pkgdir" \
+	gpep517 install-wheel --destdir "$pkgdir" \
+		.dist/*.whl
+}
+
+sha512sums="
+5bf5aa3cd4101be839e2b131bf1fa464c7cc41007c8cb4eef96e9b155f5f2d5fcff901f8dcccdcb7788d1736918c1ac866f47ae00f2261682084820071df5342  mpp-solar-0.16.57b.tar.gz
+"
