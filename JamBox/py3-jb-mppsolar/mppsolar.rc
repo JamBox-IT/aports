@@ -1,0 +1,35 @@
+#!/sbin/openrc-run
+
+service_name=$(basename "$RC_SVCNAME")
+
+name="MPP-Solar Daemon"
+command="/usr/bin/mpp-solar"
+command_args="-C /etc/mpp-solar/${service_name}.conf --daemon"
+pidfile="/run/${service_name}.pid"
+command_background="yes"
+
+supervisor="supervise-daemon"
+directory="/"
+respawn_delay=5
+respawn_max=0
+output_log="/var/log/${service_name}.log"
+error_log="/var/log/${service_name}.err"
+
+depend() {
+    need localmount
+    after networking
+    use logger
+}
+
+start_pre() {
+    checkpath --directory --mode 0755 /run
+    checkpath --file --mode 0644 "$output_log"
+    checkpath --file --mode 0644 "$error_log"
+}
+
+stop() {
+    ebegin "Stopping $name"
+    "$command" --pidfile "$pidfile" --daemon-stop
+    eend $?
+}
+
