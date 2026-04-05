@@ -23,14 +23,26 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Detect host architecture for apk-tools-url
+      id: host-arch
+      shell: bash
+      run: |
+        HOST_ARCH=$(uname -m)
+        if [ "$HOST_ARCH" = "aarch64" ] || [ "$HOST_ARCH" = "arm64" ]; then
+          echo "apk-tools-url=https://gitlab.alpinelinux.org/api/v4/projects/5/packages/generic/v2.14.10/aarch64/apk.static#!sha256!e471d35aa221d031abe9b6288aede12a8e9f1a398954e5a2e1d1bce1727b4ef4" >> $GITHUB_OUTPUT
+        else
+          echo "apk-tools-url=https://gitlab.alpinelinux.org/api/v4/projects/5/packages/generic/v2.14.10/x86_64/apk.static#!sha256!34bb1a96f0258982377a289392d4ea9f3f4b767a4bb5806b1b87179b79ad8a1c" >> $GITHUB_OUTPUT
+        fi
+
     - name: Setup Alpine Linux
-      uses: jirutka/setup-alpine@v1
+      uses: jirutka/setup-alpine@v1.4.1
       with:
         arch: ${{ inputs.arch }}
         branch: ${{ inputs.alpine-version }}
         mirror-url: ${{ inputs.mirror-url }}
         extra-repositories: ${{ inputs.mirror-url }}/${{ inputs.alpine-version }}/community
         packages: alpine-sdk abuild apk-tools jq
+        apk-tools-url: ${{ steps.host-arch.outputs.apk-tools-url }}
 
     - name: Setup abuild user and permissions
       shell: alpine.sh --root {0}
