@@ -84,17 +84,43 @@ jobs:
             exit 0
           fi
           ALPINE_VER="${{ inputs.alpine-version }}"
+          ALL_ARCHES="x86_64 aarch64 armv7 armhf"
           echo "=== Merging new packages into apk-repo ==="
           cd new-packages
+
+          # First pass: copy each arch's packages into the repo
           for arch_dir in packages-*/; do
-            if [ -d "$arch_dir" ]; then
-              arch=$(basename "$arch_dir" | sed 's/packages-//')
-              DEST_DIR="../apk-repo/${ALPINE_VER}/JamBox/${arch}"
-              mkdir -p "${DEST_DIR}"
-              echo "Merging packages for ${arch} into ${DEST_DIR}"
-              rsync -av "${arch_dir}"*.apk "${DEST_DIR}/"
-            fi
+            [ -d "$arch_dir" ] || continue
+            arch=$(basename "$arch_dir" | sed 's/packages-//')
+            DEST_DIR="../apk-repo/${ALPINE_VER}/JamBox/${arch}"
+            mkdir -p "${DEST_DIR}"
+            echo "Merging packages for ${arch} into ${DEST_DIR}"
+            for pkg in "${arch_dir}"*.apk; do
+              [ -f "$pkg" ] || continue
+              rsync -av "$pkg" "${DEST_DIR}/"
+            done
           done
+
+          # Second pass: distribute noarch packages to every arch dir.
+          # arch="all" packages are architecture-independent — every arch needs a copy.
+          for arch_dir in packages-*/; do
+            [ -d "$arch_dir" ] || continue
+            src_arch=$(basename "$arch_dir" | sed 's/packages-//')
+            for pkg in "${arch_dir}"*.apk; do
+              [ -f "$pkg" ] || continue
+              if tar -xzf "$pkg" .PKGINFO -O 2>/dev/null | grep -q "^arch = noarch"; then
+                pkg_file=$(basename "$pkg")
+                echo "  noarch: distributing $pkg_file to all arches"
+                for target_arch in $ALL_ARCHES; do
+                  [ "$target_arch" = "$src_arch" ] && continue
+                  DEST_DIR="../apk-repo/${ALPINE_VER}/JamBox/${target_arch}"
+                  mkdir -p "${DEST_DIR}"
+                  cp "$pkg" "${DEST_DIR}/${pkg_file}"
+                done
+              fi
+            done
+          done
+
           echo "✓ Merge complete."
           echo "apk-repo content:"
           ls -R ../apk-repo

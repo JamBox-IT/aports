@@ -145,7 +145,6 @@ jobs:
     if: needs.filter-existing.outputs.has-new == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
-    continue-on-error: true  # Allow partial build failures
     strategy:
       fail-fast: false
       matrix:
@@ -173,7 +172,6 @@ jobs:
 
       - name: Build packages for ${{ matrix.arch }}
         shell: alpine.sh {0}
-        continue-on-error: true
         run: |
           PACKAGES='${{ needs.filter-existing.outputs.packages }}'
           BUILD_FAILED=0
@@ -192,6 +190,57 @@ jobs:
 
           echo "Building packages for arch: ${{ matrix.arch }}"
           echo "Packages to build: $PACKAGES"
+
+          # Ensure a dependency is available before abuild runs.
+          # Priority: 1) standard Alpine repos (already unmasked, nothing to do)
+          #           2) @jambox published repo (pre-install with apk add dep@jambox)
+          #           3) local APKBUILD (build from source as last resort)
+          BUILT_LOCAL_DEPS=""
+          ensure_dep_available() {
+            local dep_name="${1%%@*}"  # strip any @tag suffix
+            echo "$BUILT_LOCAL_DEPS" | grep -qw "$dep_name" && return 0
+
+            # If available from standard (unmasked) Alpine repos, nothing to do
+            if apk policy "$dep_name" 2>/dev/null | grep "lib:" | grep -qv "@jambox\|@edge\|@testing"; then
+              return 0
+            fi
+
+            # If in @jambox, pre-install it so abuild finds it as already-installed
+            if apk policy "$dep_name" 2>/dev/null | grep -q "lib:@jambox"; then
+              echo "  --> Installing $dep_name from @jambox"
+              if sudo apk add "${dep_name}@jambox" 2>&1; then
+                echo "  ✅ Installed from @jambox: $dep_name"
+                BUILT_LOCAL_DEPS="$BUILT_LOCAL_DEPS $dep_name"
+                return 0
+              fi
+              echo "  ⚠️  @jambox install failed, falling back to local build"
+            fi
+
+            # Last resort: build from local APKBUILD if one exists
+            local dep_dir=""
+            for d in "$REPO_PATH"/JamBox/*/; do
+              [ -f "$d/APKBUILD" ] || continue
+              local d_pkg
+              d_pkg=$(. "$d/APKBUILD" 2>/dev/null && echo "$pkgname")
+              if [ "$d_pkg" = "$dep_name" ]; then
+                dep_dir="$d"
+                break
+              fi
+            done
+            [ -z "$dep_dir" ] && return 0  # not a JamBox package at all, let abuild handle it
+
+            echo "  --> Building local dep from APKBUILD: $dep_name (not yet in @jambox)"
+            cd "$dep_dir" || return 1
+            if abuild -r 2>&1; then
+              echo "  ✅ Built locally: $dep_name"
+              BUILT_LOCAL_DEPS="$BUILT_LOCAL_DEPS $dep_name"
+            else
+              echo "  ❌ Failed to build local dep: $dep_name"
+              cd "$REPO_PATH"
+              return 1
+            fi
+            cd "$REPO_PATH"
+          }
 
           # Parse JSON array
           for pkg_dir in $(echo "$PACKAGES" | jq -r '.[]'); do
@@ -216,6 +265,19 @@ jobs:
             echo "Package: $pkgname (v$pkgver-r$pkgrel)"
             echo "Architecture: ${{ matrix.arch }}"
             echo "Architectures: $arch"
+
+            # Ensure all deps are available before calling abuild.
+            # Handles deps only in @jambox (pre-install) or not yet published (local build).
+            for dep in $depends $makedepends; do
+              ensure_dep_available "$dep" || {
+                echo "❌ FAILED: Could not satisfy dependency $dep for $pkgname"
+                BUILD_FAILED=1
+                FAILED_PACKAGES="$FAILED_PACKAGES $pkgname"
+                continue 2
+              }
+            done
+            cd "$pkg_dir" || exit 1
+            . ./APKBUILD  # re-source after cd back
 
             # Check if this package should be built for this architecture
             if echo "$arch" | grep -qE "(all|noarch|${{ matrix.arch }})"; then
@@ -272,6 +334,7 @@ jobs:
           fi
 
       - name: Collect built packages
+        if: always()
         shell: alpine.sh {0}
         run: |
           # Copy packages to a location accessible outside chroot
@@ -281,6 +344,7 @@ jobs:
           ls -la "$WORKSPACE/packages/${{ matrix.arch }}/" || echo "No packages built"
 
       - name: Upload build artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: packages-${{ matrix.arch }}
