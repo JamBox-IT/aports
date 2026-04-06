@@ -3,7 +3,7 @@
 pkgname=py3-pymodbus
 _pkgreal=pymodbus
 pkgver=3.6.5
-pkgrel=0
+pkgrel=1
 pkgdesc="A fully featured modbus protocol stack in python"
 url="http://packages.python.org/pypi/pymodbus"
 arch="all"
