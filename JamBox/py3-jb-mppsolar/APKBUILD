@@ -13,7 +13,7 @@ checkdepends="python3-dev pytest"
 makedepends="py3-setuptools py3-gpep517 py3-wheel python3-dev poetry py3-paho-mqtt py3-pip py3-psycopg2"
 #source="https://files.pythonhosted.org/packages/96/8a/93c950c2250f376eb9d258aa9bb84b32f3bf676ec35f50f2722ce656fa76/mppsolar-0.16.29.tar.gz"
 source="$_pkgreal-$pkgver.tar.gz::https://github.com/cordelster/mpp-solar/archive/refs/tags/v$pkgver.tar.gz
-        "
+    "
 
 builddir="$srcdir/$_pkgreal-$pkgver"
 options="!check"
